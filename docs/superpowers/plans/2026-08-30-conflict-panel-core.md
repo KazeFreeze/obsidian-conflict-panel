@@ -663,27 +663,39 @@ import { describe, expect, it } from "vitest";
 import { toHunks } from "./diff";
 
 describe("toHunks", () => {
-	it("returns no hunks for identical text", () => {
-		expect(toHunks("a\nb\n", "a\nb\n")).toEqual([]);
+	it("returns no hunks for identical text", async () => {
+		expect(await toHunks("a\nb\n", "a\nb\n")).toEqual({
+			status: "ok",
+			hunks: [],
+		});
 	});
 
-	it("reports an added line", () => {
-		const h = toHunks("a\n", "a\nb\n");
+	it("reports an added line", async () => {
+		const result = await toHunks("a\n", "a\nb\n");
+		expect(result.status).toBe("ok");
+		if (result.status !== "ok") return;
+		const h = result.hunks;
 		expect(h).toHaveLength(1);
-		expect(h[0].right).toEqual(["b"]);
-		expect(h[0].left).toEqual([]);
+		expect(h[0]!.right).toEqual(["b"]);
+		expect(h[0]!.left).toEqual([]);
 	});
 
-	it("reports a changed line as left and right together", () => {
-		const h = toHunks("gym at 6\n", "dentist 3pm\n");
-		expect(h[0].left).toEqual(["gym at 6"]);
-		expect(h[0].right).toEqual(["dentist 3pm"]);
+	it("reports a changed line as left and right together", async () => {
+		const result = await toHunks("gym at 6\n", "dentist 3pm\n");
+		expect(result.status).toBe("ok");
+		if (result.status !== "ok") return;
+		const h = result.hunks;
+		expect(h[0]!.left).toEqual(["gym at 6"]);
+		expect(h[0]!.right).toEqual(["dentist 3pm"]);
 	});
 
-	it("stops after the hunk cap so a pathological diff cannot block the UI thread", () => {
+	it("rejects pathological input before diffing in well under a second", async () => {
 		const left = Array.from({ length: 5000 }, (_, i) => `l${i}`).join("\n");
 		const right = Array.from({ length: 5000 }, (_, i) => `r${i}`).join("\n");
-		expect(toHunks(left, right, 100).length).toBeLessThanOrEqual(100);
+		const started = performance.now();
+
+		expect(await toHunks(left, right, 100)).toEqual({ status: "too-large" });
+		expect(performance.now() - started).toBeLessThan(250);
 	});
 });
 ```
@@ -705,21 +717,42 @@ export interface Hunk {
 	right: string[];
 }
 
+export type DiffResult =
+	| { status: "ok"; hunks: Hunk[] }
+	| { status: "too-large" };
+
 const DEFAULT_MAX_HUNKS = 500;
+// These limits bound jsdiff's worst-case work while still covering ordinary notes.
+// String length is UTF-16 code units, available in O(1); line counting exits early.
+const MAX_INPUT_CHARS = 100_000;
+const MAX_INPUT_LINES = 1_000;
 
 const lines = (value: string): string[] =>
 	value.split("\n").filter((l, i, a) => !(i === a.length - 1 && l === ""));
 
+function inputTooLarge(value: string): boolean {
+	if (value.length > MAX_INPUT_CHARS) return true;
+	let lineCount = 1;
+	for (let i = 0; i < value.length; i++) {
+		if (value.charCodeAt(i) === 10 && ++lineCount > MAX_INPUT_LINES) return true;
+	}
+	return false;
+}
+
 /**
- * Line diff, capped. Android will kill the WebView if the main thread blocks long
- * enough, so a pathological diff must degrade rather than hang. Hitting the cap
- * means "too different to review here", which the UI states.
+ * Line diff with bounded input and output. Oversized input is rejected before
+ * jsdiff sees it, and accepted work yields once before running so the WebView can
+ * render. The UI maps `too-large` to "too large to compare here".
  */
-export function toHunks(
+export async function toHunks(
 	left: string,
 	right: string,
 	maxHunks: number = DEFAULT_MAX_HUNKS,
-): Hunk[] {
+): Promise<DiffResult> {
+	if (inputTooLarge(left) || inputTooLarge(right)) return { status: "too-large" };
+
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
 	const hunks: Hunk[] = [];
 	let pending: Hunk | null = null;
 
@@ -729,7 +762,7 @@ export function toHunks(
 				hunks.push(pending);
 				pending = null;
 			}
-			if (hunks.length >= maxHunks) return hunks;
+			if (hunks.length >= maxHunks) return { status: "ok", hunks };
 			continue;
 		}
 		pending ??= { left: [], right: [] };
@@ -738,7 +771,7 @@ export function toHunks(
 	}
 
 	if (pending) hunks.push(pending);
-	return hunks.slice(0, maxHunks);
+	return { status: "ok", hunks: hunks.slice(0, maxHunks) };
 }
 ```
 

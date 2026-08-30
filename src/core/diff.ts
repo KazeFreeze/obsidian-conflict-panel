@@ -7,21 +7,42 @@ export interface Hunk {
 	right: string[];
 }
 
+export type DiffResult =
+	| { status: "ok"; hunks: Hunk[] }
+	| { status: "too-large" };
+
 const DEFAULT_MAX_HUNKS = 500;
+// These limits bound jsdiff's worst-case work while still covering ordinary notes.
+// String length is UTF-16 code units, available in O(1); line counting exits early.
+const MAX_INPUT_CHARS = 100_000;
+const MAX_INPUT_LINES = 1_000;
 
 const lines = (value: string): string[] =>
 	value.split("\n").filter((l, i, a) => !(i === a.length - 1 && l === ""));
 
+function inputTooLarge(value: string): boolean {
+	if (value.length > MAX_INPUT_CHARS) return true;
+	let lineCount = 1;
+	for (let i = 0; i < value.length; i++) {
+		if (value.charCodeAt(i) === 10 && ++lineCount > MAX_INPUT_LINES) return true;
+	}
+	return false;
+}
+
 /**
- * Line diff, capped. Android will kill the WebView if the main thread blocks long
- * enough, so a pathological diff must degrade rather than hang. Hitting the cap
- * means "too different to review here", which the UI states.
+ * Line diff with bounded input and output. Oversized input is rejected before
+ * jsdiff sees it, and accepted work yields once before running so the WebView can
+ * render. The UI maps `too-large` to "too large to compare here".
  */
-export function toHunks(
+export async function toHunks(
 	left: string,
 	right: string,
 	maxHunks: number = DEFAULT_MAX_HUNKS,
-): Hunk[] {
+): Promise<DiffResult> {
+	if (inputTooLarge(left) || inputTooLarge(right)) return { status: "too-large" };
+
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
 	const hunks: Hunk[] = [];
 	let pending: Hunk | null = null;
 
@@ -31,7 +52,7 @@ export function toHunks(
 				hunks.push(pending);
 				pending = null;
 			}
-			if (hunks.length >= maxHunks) return hunks;
+			if (hunks.length >= maxHunks) return { status: "ok", hunks };
 			continue;
 		}
 		pending ??= { left: [], right: [] };
@@ -40,5 +61,5 @@ export function toHunks(
 	}
 
 	if (pending) hunks.push(pending);
-	return hunks.slice(0, maxHunks);
+	return { status: "ok", hunks: hunks.slice(0, maxHunks) };
 }
