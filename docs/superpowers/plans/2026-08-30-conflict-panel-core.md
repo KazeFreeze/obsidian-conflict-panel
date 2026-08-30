@@ -795,6 +795,7 @@ The only mutating module. Two invariants are enforced by a test that reads the s
 
 **Files:**
 - Create: `src/vault-ops.ts`, `src/boundaries.test.ts`
+- Create: `src/vault-ops.test.ts` for recovery-path round trips and writer behaviour
 
 - [ ] **Step 1: Write the failing boundary test `src/boundaries.test.ts`**
 
@@ -930,10 +931,14 @@ export class VaultOps {
 		return `${this.recoveryFolder}/${flat}.conflictbak`;
 	}
 
-	/** Inverse of recoveryPathFor. Decode in reverse order. */
+	/** Inverse of every path freePath can produce, including collision markers. */
 	static sourcePathFromRecovery(recoveryName: string): string {
-		return recoveryName
-			.replace(/\.conflictbak$/, "")
+		const slash = recoveryName.lastIndexOf("/");
+		const archiveName = recoveryName.slice(slash + 1);
+		// Order matters: remove framing first, then reverse source-path escaping.
+		const withoutExtension = archiveName.replace(/\.conflictbak$/, "");
+		const withoutMarker = withoutExtension.replace(/%00\d+$/, "");
+		return withoutMarker
 			.replace(/%2F/g, "/")
 			.replace(/%25/g, "%");
 	}
@@ -949,7 +954,9 @@ export class VaultOps {
 		if (!(await this.app.vault.adapter.exists(base))) return base;
 		const stem = base.replace(/\.conflictbak$/, "");
 		for (let n = 2; n < 1000; n++) {
-			const candidate = `${stem}-${n}.conflictbak`;
+			// Literal `%` is already `%25`, so raw `%00` is an unambiguous,
+			// variable-width collision marker that restore can remove exactly.
+			const candidate = `${stem}%00${n}.conflictbak`;
 			if (!(await this.app.vault.adapter.exists(candidate))) return candidate;
 		}
 		throw new DestinationOccupied(base);
