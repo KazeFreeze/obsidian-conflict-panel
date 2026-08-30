@@ -407,6 +407,25 @@ describe("groupConflicts", () => {
 		expect(groupConflicts([c], vault([c]), "Conflict Recovery")).toHaveLength(0);
 	});
 
+	it.each([
+		"Conflict Recovery/",
+		"/Conflict Recovery",
+		"//Conflict Recovery///",
+	])("normalises recovery setting separators in %j", (recoveryFolder) => {
+		const c = "Conflict Recovery/x.sync-conflict-20260830-143000-AAA.md";
+		expect(groupConflicts([c], vault([c]), recoveryFolder)).toHaveLength(0);
+	});
+
+	it("collapses doubled separators inside the recovery setting", () => {
+		const c = "Archive/Conflicts/x.sync-conflict-20260830-143000-AAA.md";
+		expect(groupConflicts([c], vault([c]), "Archive//Conflicts")).toHaveLength(0);
+	});
+
+	it("does not exclude a sibling whose name merely shares the prefix", () => {
+		const c = "Conflict Recovery-old/x.sync-conflict-20260830-143000-AAA.md";
+		expect(groupConflicts([c], vault([c]), "Conflict Recovery/")).toHaveLength(1);
+	});
+
 	it("collects several copies under one original, oldest first", () => {
 		const a = "note.sync-conflict-20260830-090000-AAA.md";
 		const b = "note.sync-conflict-20260830-143000-BBB.md";
@@ -462,14 +481,17 @@ export function groupConflicts(
 	index: VaultIndex,
 	recoveryFolder: string,
 ): ConflictGroup[] {
-	const prefix = `${recoveryFolder}/`;
+	const recoveryRoot = recoveryFolder
+		.replace(/\/+/g, "/")
+		.replace(/^\/+|\/+$/g, "");
+	const prefix = `${recoveryRoot}/`;
 	const byOriginal = new Map<string, ParsedConflictFile[]>();
 
 	for (const path of paths) {
 		// The recovery folder is excluded outright. The non-note extension is only
 		// defence in depth; this exclusion is the real protection against the
 		// plugin rediscovering its own artifacts.
-		if (path === recoveryFolder || path.startsWith(prefix)) continue;
+		if (recoveryRoot && (path === recoveryRoot || path.startsWith(prefix))) continue;
 
 		const parsed = parseConflictPath(path);
 		if (!parsed) continue;

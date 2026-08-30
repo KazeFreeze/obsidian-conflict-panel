@@ -36,14 +36,17 @@ export function groupConflicts(
 	index: VaultIndex,
 	recoveryFolder: string,
 ): ConflictGroup[] {
-	const prefix = `${recoveryFolder}/`;
+	const recoveryRoot = recoveryFolder
+		.replace(/\/+/g, "/")
+		.replace(/^\/+|\/+$/g, "");
+	const prefix = `${recoveryRoot}/`;
 	const byOriginal = new Map<string, ParsedConflictFile[]>();
 
 	for (const path of paths) {
 		// The recovery folder is excluded outright. The non-note extension is only
 		// defence in depth; this exclusion is the real protection against the
 		// plugin rediscovering its own artifacts.
-		if (path === recoveryFolder || path.startsWith(prefix)) continue;
+		if (recoveryRoot && (path === recoveryRoot || path.startsWith(prefix))) continue;
 
 		const parsed = parseConflictPath(path);
 		if (!parsed) continue;

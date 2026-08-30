@@ -49,6 +49,25 @@ describe("groupConflicts", () => {
 		expect(groupConflicts([c], vault([c]), "Conflict Recovery")).toHaveLength(0);
 	});
 
+	it.each([
+		"Conflict Recovery/",
+		"/Conflict Recovery",
+		"//Conflict Recovery///",
+	])("normalises recovery setting separators in %j", (recoveryFolder) => {
+		const c = "Conflict Recovery/x.sync-conflict-20260830-143000-AAA.md";
+		expect(groupConflicts([c], vault([c]), recoveryFolder)).toHaveLength(0);
+	});
+
+	it("collapses doubled separators inside the recovery setting", () => {
+		const c = "Archive/Conflicts/x.sync-conflict-20260830-143000-AAA.md";
+		expect(groupConflicts([c], vault([c]), "Archive//Conflicts")).toHaveLength(0);
+	});
+
+	it("does not exclude a sibling whose name merely shares the prefix", () => {
+		const c = "Conflict Recovery-old/x.sync-conflict-20260830-143000-AAA.md";
+		expect(groupConflicts([c], vault([c]), "Conflict Recovery/")).toHaveLength(1);
+	});
+
 	it("collects several copies under one original, oldest first", () => {
 		const a = "note.sync-conflict-20260830-090000-AAA.md";
 		const b = "note.sync-conflict-20260830-143000-BBB.md";
