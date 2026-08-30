@@ -1,4 +1,4 @@
-# Obsidian Conflict Panel — design (rev 6)
+# Obsidian Conflict Panel — design (rev 7)
 
 An Obsidian plugin that finds Syncthing `*.sync-conflict-*` files and resolves them **without
 leaving Obsidian**. Standalone repo. Desktop and Android, one responsive UI.
@@ -30,8 +30,13 @@ Five audits. Two revisions were structurally wrong and are recorded so the mista
   passes on content A, A is archived, another writer changes the copy to B, `trashFile` deletes B. On
   a vault configured `trashOption: "none"` that is permanent. A second check narrows the window and
   cannot close it.
-- **rev 6** replaces copy-then-delete with a single move. The losing file is *preserved*, not copied,
-  so the window cannot exist.
+- **rev 6** replaced copy-then-delete with a single move. The losing file is *preserved*, not copied,
+  so that window cannot exist. Audit six confirmed the rev-5 hole is closed and endorsed dropping
+  pruning, but found five gaps an implementer would have had to invent answers for.
+- **rev 7** closes them: a no-clobber rule for every rename, binary groups restricted to move-only,
+  a distinct shape when the canonical path holds a folder, an in-plugin recovery reader so archived
+  files are reachable without depending on an Obsidian setting, and an honest account of where
+  filename-only grouping is ambiguous.
 
 ## v0.1 scope
 
@@ -68,12 +73,24 @@ Authoritative. Earlier revisions contradicted themselves by describing actions i
 With several copies the user picks **one** *X*. There is no "save them all"; the rest are preserved
 in recovery and can be retrieved by hand.
 
+**An orphan whose original reappears mid-decision aborts.** See the no-clobber rule.
+
+**Binary groups are move-only in v0.1.** `Vault.process` is text-only and there is no binary
+equivalent, so "keep copy *X*" would require an unguarded `modifyBinary` with no version
+precondition. Rather than invent that, binary groups offer exactly two actions: move copies to
+recovery, or do nothing. They are listed with full provenance so you know they exist, and they are
+never diffed. Resolving a binary conflict is a v0.2 question.
+
+**A canonical path occupied by a folder is a distinct shape.** `original: TFile | null` collapses
+"path is free" and "path holds a `TFolder`", and restoring onto the latter would attempt to rename a
+file over a directory. The group type carries a third state, rendered view-only with an explanation.
+
 ## Write paths
 
 Only **two** actions touch an existing file. Everything else is a move or a create.
 
 ```js
-// Only when replacing the original's content with a chosen copy.
+// Only when replacing the original's content with a chosen copy. Text only.
 await vault.process(original, (current) => {
   if (current !== reviewedOriginalText) throw new StaleInput();
   return chosenText;
@@ -83,10 +100,22 @@ await vault.process(original, (current) => {
 for (const copy of group.copies) {
   try {
     await ensureFolder(recoveryFolderFor(copy));
-    await vault.rename(copy, recoveryPathFor(copy));
+    await vault.rename(copy, await freePathNear(recoveryPathFor(copy)));
   } catch (e) { report(copy, e); }
 }
 ```
+
+**No-clobber is mandatory, because `Vault.rename` promises nothing about it.** Its contract documents
+neither "throws if the destination exists" nor replace semantics, so the plugin must never issue a
+rename to a path it has not just found free. `freePathNear` appends `-2`, `-3` and so on until
+`getAbstractFileByPath` returns null.
+
+That narrows the race without closing it, which is acceptable in the recovery folder: a collision
+there costs a duplicate artifact, not data. It is **not** acceptable for orphan restoration, where
+the destination is a real note path. There the rule is stricter: **if the original path is occupied at
+the moment of restore, abort and re-present the group.** An occupied path means the original came
+back while the user was deciding, which turns an orphan into an ordinary conflict, and silently
+renaming over it would destroy a note nobody reviewed.
 
 **Exact string equality, not SHA-256.** The reviewed text is already retained for the diff.
 
@@ -108,10 +137,31 @@ Default `Conflict Recovery/`, configurable. **Visible and Vault-managed**, becau
 are hidden from Obsidian's loaded vault tree and require the Adapter API — the same reason conflicts
 inside `.obsidian/` are invisible to every plugin surveyed.
 
-**Archived files get a non-note extension**, `.conflictbak`. Obsidian treats unknown extensions as
-unsupported files: visible in the explorer, absent from search, the graph, backlinks, Dataview, and
-any template that globs the vault. Without this, a bad week of conflicts would drop dozens of
+**Archived files get a non-note extension**, `.conflictbak`. Obsidian does not treat unknown
+extensions as notes, so they stay out of content search, backlinks, the graph, and Dataview, which
+indexes only `.md` and `.markdown`. Without this, a bad week of conflicts would drop dozens of
 near-duplicate notes into exactly the tools used to find things.
+
+Two claims rev 6 made about this were **wrong** and are corrected here:
+
+*They are not unconditionally visible.* Obsidian shows unsupported files in the File Explorer and
+Quick Switcher only when **Show all file types** is enabled. With it off they may also stop being
+Vault-manageable after a restart, since the Vault API only exposes files loaded into the visible tree.
+
+*They are not hidden from everything.* Any plugin or template using `vault.getFiles()`, adapter
+listing, or raw filesystem access still sees them. "Absent from any template that globs the vault"
+was false.
+
+**Recovery must therefore not depend on that setting.** The panel carries a **Recovery** list that
+enumerates the folder, previews each artifact, and offers *restore as `.md`*. This is the contract
+that makes archiving safe to rely on: Obsidian cannot natively open `.conflictbak`, and on Android
+there is no application association for an invented extension, so without an in-plugin reader the
+recovery story would be "rename it by hand in a file manager", which is not a story on a phone.
+
+**Index staleness is accepted, not solved.** Renaming `.md` to an unsupported extension does not
+reliably evict the old entry: Dataview's rename handler returns early when the new path is not
+Markdown, so a stale entry can survive until reinitialisation. The panel says so rather than
+pretending the transition is clean.
 
 **Names encode a hash of the full source path**, not the basename, because two `note.md` in different
 folders would otherwise collide in a single batch. Parent folders are created explicitly; neither
@@ -120,6 +170,11 @@ folders would otherwise collide in a single batch. Parent folders are created ex
 **Nothing prunes it.** No retention, no automatic deletion, no clock-skew hazard, and no need to tell
 a user's note apart from an artifact. The folder grows and the user empties it by hand whenever they
 like. A deliberate trade: unbounded growth in exchange for a plugin that cannot delete.
+
+The residual risk is storage, not loss. A conflict storm replicated to a phone can fill it, and a
+full disk makes unrelated Obsidian and Syncthing writes fail. The panel therefore **reports recovery
+count and total size** so the folder cannot grow unnoticed, and the Recovery list is where you clear
+it. Automatic deletion is still not worth reintroducing.
 
 **It syncs**, like any vault folder, so recovery is available on whichever device notices the mistake
 and reaches the nightly offsite snapshot. The cost is that losing versions replicate to every peer,
@@ -132,6 +187,14 @@ one entry. The null case is the orphan.
 
 **Copy-of-a-copy resolves recursively.** `note.sync-conflict-A.sync-conflict-B.md` strips suffixes
 until a stable base remains, and all descendants attach to that one original.
+
+**This is deterministic but not always correct, and the spec does not pretend otherwise.** A note
+*deliberately named* `incident.sync-conflict-20260829-120000-ABCDEF2.md` is indistinguishable, by
+filename alone, from a conflict copy of `incident.md`. Recursive stripping would wrongly attach its
+own conflict copy to `incident.md`. No filename-only algorithm can resolve this, and without the
+Syncthing REST API there is no other signal. Every group therefore offers **view-only, do not
+group** as an escape hatch, and grouping is never acted on without the user seeing which files were
+paired.
 
 **Re-detection is prevented by folder exclusion, not by the extension.** `core/detect.ts` normalises
 the path and rejects the recovery root outright. The non-note extension is defence in depth: an
@@ -189,13 +252,15 @@ diff), `vault-ops.ts` (the only module permitted to write, move or create), `not
 3. **Input-version precondition.** The only content replacement checks equality against the reviewed
    text, inside `process`.
 4. **Cleanup preserves.** Copies are moved, never copied-then-removed.
-5. **Refuse while any group file is open in an editor.**
-6. **Resurrection is warned.** Restoring an orphan copy to its original path states plainly that it
+5. **No rename targets an occupied path.** Destinations are checked immediately before the move. In
+   the recovery folder a collision yields a suffixed name; on a real note path it aborts.
+6. **Refuse while any group file is open in an editor.**
+7. **Resurrection is warned.** Restoring an orphan copy to its original path states plainly that it
    propagates to every device.
-7. **Every control has a visible text label**, ≥48dp touch target, adequate separation.
-8. **One failure never aborts the batch.** Per-copy `try/catch`.
-9. **Decisions persist outside the DOM**, because Android can destroy a view at any await.
-10. **Re-entrancy guard.** A resolve in flight blocks another for the same group.
+8. **Every control has a visible text label**, ≥48dp touch target, adequate separation.
+9. **One failure never aborts the batch.** Per-copy `try/catch`.
+10. **Decisions persist outside the DOM**, because Android can destroy a view at any await.
+11. **Re-entrancy guard.** A resolve in flight blocks another for the same group.
 
 ## Labels
 
