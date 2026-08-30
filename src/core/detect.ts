@@ -19,6 +19,7 @@ export function parseConflictPath(path: string): ParsedConflict | null {
 	if (!m?.groups) return null;
 
 	const { base, date, time, device, ext } = m.groups;
+	if (!base || !date || !time || !device) return null;
 	return {
 		parentPath: `${dir}${base}${ext ?? ""}`,
 		deviceId: device,
