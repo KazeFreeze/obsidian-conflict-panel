@@ -122,9 +122,13 @@ export class VaultOps {
 	}
 
 	private async ensureFolder(path: string): Promise<void> {
-		// Neither create nor rename creates parent folders.
-		if (!(await this.app.vault.adapter.exists(path))) {
-			await this.app.vault.adapter.mkdir(path);
+		// DataAdapter.mkdir is not documented as recursive. Build parents in order.
+		let current = "";
+		for (const segment of path.split("/").filter(Boolean)) {
+			current = current ? `${current}/${segment}` : segment;
+			if (!(await this.app.vault.adapter.exists(current))) {
+				await this.app.vault.adapter.mkdir(current);
+			}
 		}
 	}
 }

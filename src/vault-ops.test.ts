@@ -59,3 +59,26 @@ describe("VaultOps restore", () => {
 		expect(rename).not.toHaveBeenCalled();
 	});
 });
+
+describe("VaultOps recovery folder", () => {
+	it("creates every missing parent for a nested recovery folder", async () => {
+		const mkdir = vi.fn(async (_path: string) => undefined);
+		const app = {
+			vault: {
+				adapter: {
+					exists: vi.fn(async () => false),
+					mkdir,
+				},
+				rename: vi.fn(async () => undefined),
+			},
+		} as unknown as App;
+
+		await new VaultOps(app, "Archive/Conflicts/2026").moveToRecovery(file("note.md"));
+
+		expect(mkdir.mock.calls.map(([path]) => path)).toEqual([
+			"Archive",
+			"Archive/Conflicts",
+			"Archive/Conflicts/2026",
+		]);
+	});
+});
