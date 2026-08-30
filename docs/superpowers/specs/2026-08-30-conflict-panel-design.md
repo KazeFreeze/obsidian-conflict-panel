@@ -281,9 +281,10 @@ diff), `vault-ops.ts` (the only module permitted to write, move or create), `not
 
 ## Invariants
 
-1. **One writer.** Only `vault-ops.ts` imports mutating APIs, enforced by a test. A boundary check,
-   **not** a concurrency test.
-2. **No deletion API is called anywhere in the plugin.** Enforced by the same test.
+1. **One writer.** Only `vault-ops.ts` imports mutating APIs. A source-spelling guard catches common
+   literal violations; it is not proof and not a concurrency test.
+2. **No deletion API is called anywhere in the plugin.** The same kind of spelling guard supplements
+   review but cannot detect every alias or computed access.
 3. **Input-version precondition.** The only content replacement checks equality against the reviewed
    text, inside `process`.
 4. **Cleanup preserves.** Copies are moved, never copied-then-removed.
