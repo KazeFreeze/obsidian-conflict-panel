@@ -1,0 +1,942 @@
+# Conflict Panel v0.1 Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** An Obsidian plugin that lists Syncthing `*.sync-conflict-*` files in a sidebar, shows a read-only diff, and resolves them by whole-file pick, moving the losing copy into a recovery folder.
+
+**Architecture:** Pure decision modules under `src/core/` with no `obsidian` import, unit-tested with vitest. A thin Obsidian shell wires them to views. `src/vault-ops.ts` is the only module permitted to mutate the vault, and the plugin calls no deletion API at all. The recovery folder is the single place using `DataAdapter`, because unsupported files may not be in Obsidian's vault tree.
+
+**Tech Stack:** TypeScript, esbuild, vitest, `diff` (jsdiff), Obsidian API 1.13.x.
+
+**Spec:** `docs/superpowers/specs/2026-08-30-conflict-panel-design.md` (rev 8).
+
+---
+
+## File Structure
+
+| file | responsibility |
+|---|---|
+| `src/core/detect.ts` | Parse one path into a conflict record or null. Pure string work. |
+| `src/core/group.ts` | Files → `ConflictGroup[]`, recursive suffix stripping, shape precedence. |
+| `src/core/entry-view.ts` | Group → the actions the UI may offer. Actions derive from shape. |
+| `src/core/diff.ts` | jsdiff wrapper → hunks, display only. |
+| `src/core/types.ts` | Shared types for the above. No logic. |
+| `src/vault-ops.ts` | The only mutating module. Vault for notes, Adapter for recovery. |
+| `src/panel-view.ts` | Sidebar `ItemView`: group list and count. |
+| `src/compare-view.ts` | Main-tab `ItemView`: diff and action buttons. |
+| `src/main.ts` | Lifecycle, commands, view registration. |
+
+`core/` never imports `obsidian`. That is enforced by a test in Task 6, not by convention.
+
+---
+
+### Task 1: De-template the repo and add vitest
+
+The repo is still `obsidianmd/obsidian-sample-plugin`. Nothing below works until the identity and toolchain are right.
+
+**Files:**
+- Modify: `manifest.json`, `package.json`, `README.md`, `versions.json`
+- Replace: `src/main.ts`, `src/settings.ts`
+- Create: `vitest.config.ts`
+
+- [ ] **Step 1: Rewrite `manifest.json`**
+
+```json
+{
+	"id": "conflict-panel",
+	"name": "Conflict Panel",
+	"version": "0.1.0",
+	"minAppVersion": "1.1.0",
+	"description": "Find and resolve Syncthing sync-conflict files without leaving Obsidian.",
+	"author": "Bernard G. Tapiru, Jr.",
+	"authorUrl": "https://github.com/KazeFreeze",
+	"isDesktopOnly": false
+}
+```
+
+`minAppVersion` is 1.1.0 because `Vault.process` was introduced there. No trash API is used, so 1.6.6 is not required.
+
+- [ ] **Step 2: Update `package.json` identity and add vitest**
+
+Change `"name"` to `"obsidian-conflict-panel"`, `"version"` to `"0.1.0"`, then add to `scripts`:
+
+```json
+"test": "vitest run",
+"test:watch": "vitest"
+```
+
+Then install:
+
+```bash
+npm install --save-dev vitest
+npm install --save diff @types/diff
+```
+
+- [ ] **Step 3: Create `vitest.config.ts`**
+
+```ts
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+	test: {
+		include: ["src/**/*.test.ts"],
+		environment: "node",
+	},
+});
+```
+
+- [ ] **Step 4: Replace `src/settings.ts`**
+
+```ts
+import { App, PluginSettingTab, Setting } from "obsidian";
+import type ConflictPanelPlugin from "./main";
+
+export interface ConflictPanelSettings {
+	/** Vault-relative folder that resolved conflict copies are moved into. */
+	recoveryFolder: string;
+}
+
+export const DEFAULT_SETTINGS: ConflictPanelSettings = {
+	recoveryFolder: "Conflict Recovery",
+};
+
+export class ConflictPanelSettingTab extends PluginSettingTab {
+	plugin: ConflictPanelPlugin;
+
+	constructor(app: App, plugin: ConflictPanelPlugin) {
+		super(app, plugin);
+		this.plugin = plugin;
+	}
+
+	display(): void {
+		const { containerEl } = this;
+		containerEl.empty();
+
+		new Setting(containerEl)
+			.setName("Recovery folder")
+			.setDesc(
+				"Resolved conflict copies are moved here. Nothing is ever deleted, so this folder grows until you empty it yourself.",
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("Conflict Recovery")
+					.setValue(this.plugin.settings.recoveryFolder)
+					.onChange(async (value) => {
+						this.plugin.settings.recoveryFolder =
+							value.trim() || DEFAULT_SETTINGS.recoveryFolder;
+						await this.plugin.saveSettings();
+					}),
+			);
+	}
+}
+```
+
+- [ ] **Step 5: Replace `src/main.ts` with a minimal shell**
+
+```ts
+import { Plugin } from "obsidian";
+import {
+	ConflictPanelSettings,
+	ConflictPanelSettingTab,
+	DEFAULT_SETTINGS,
+} from "./settings";
+
+export default class ConflictPanelPlugin extends Plugin {
+	settings: ConflictPanelSettings;
+
+	async onload(): Promise<void> {
+		await this.loadSettings();
+		this.addSettingTab(new ConflictPanelSettingTab(this.app, this));
+	}
+
+	async loadSettings(): Promise<void> {
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+	}
+
+	async saveSettings(): Promise<void> {
+		await this.saveData(this.settings);
+	}
+}
+```
+
+- [ ] **Step 6: Replace `README.md`**
+
+```markdown
+# Conflict Panel
+
+Find and resolve Syncthing `*.sync-conflict-*` files without leaving Obsidian.
+
+**This plugin never deletes anything.** Resolving a conflict moves the losing copy
+into a recovery folder. Emptying that folder is left to you.
+
+Design notes and the reasoning behind that constraint are in
+`docs/superpowers/specs/`.
+
+## Status
+
+v0.1 in development. Not yet released.
+```
+
+- [ ] **Step 7: Reset `versions.json`**
+
+```json
+{
+	"0.1.0": "1.1.0"
+}
+```
+
+- [ ] **Step 8: Verify the build and lint still pass**
+
+Run: `npm run build && npm run lint`
+Expected: both exit 0. `main.js` is produced.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add -A
+git commit -m "chore: de-template, add vitest and plugin identity"
+```
+
+---
+
+### Task 2: `core/types.ts` and `core/detect.ts`
+
+**Files:**
+- Create: `src/core/types.ts`, `src/core/detect.ts`, `src/core/detect.test.ts`
+
+- [ ] **Step 1: Create `src/core/types.ts`**
+
+```ts
+/** One parsed `*.sync-conflict-*` filename. Paths are vault-relative strings. */
+export interface ParsedConflict {
+	/** Path this copy conflicts with, after stripping ONE suffix. */
+	parentPath: string;
+	/** Syncthing's short device ID, NOT the friendly name. There is no mapping. */
+	deviceId: string;
+	/** YYYYMMDD as written in the filename. */
+	date: string;
+	/** HHMMSS as written in the filename. */
+	time: string;
+}
+
+export type ConflictShape =
+	/** Original exists, is `.md`. Diffable and resolvable. */
+	| "normal"
+	/** Original absent. Syncthing's edit-versus-delete. */
+	| "orphan"
+	/** Not `.md`. Listed and movable, never diffed or promoted. */
+	| "opaque"
+	/** Canonical path holds a folder. View-only. */
+	| "blocked";
+
+export interface ConflictGroup {
+	/** The canonical path all copies resolve to. */
+	originalPath: string;
+	shape: ConflictShape;
+	/** At least one. Sorted by date+time ascending. */
+	copies: ParsedConflictFile[];
+}
+
+export interface ParsedConflictFile extends ParsedConflict {
+	/** Full vault-relative path of the conflict copy itself. */
+	path: string;
+}
+```
+
+- [ ] **Step 2: Write the failing test `src/core/detect.test.ts`**
+
+```ts
+import { describe, expect, it } from "vitest";
+import { parseConflictPath } from "./detect";
+
+describe("parseConflictPath", () => {
+	it("parses a plain conflict filename", () => {
+		expect(parseConflictPath("note.sync-conflict-20260830-143000-ABCDEF.md")).toEqual({
+			parentPath: "note.md",
+			deviceId: "ABCDEF",
+			date: "20260830",
+			time: "143000",
+		});
+	});
+
+	it("keeps the folder path", () => {
+		const r = parseConflictPath("a/b/note.sync-conflict-20260830-143000-ABCDEF.md");
+		expect(r?.parentPath).toBe("a/b/note.md");
+	});
+
+	it("strips only the LAST suffix, so recursion can handle the rest", () => {
+		const r = parseConflictPath(
+			"n.sync-conflict-20260101-010101-AAA.sync-conflict-20260202-020202-BBB.md",
+		);
+		expect(r?.parentPath).toBe("n.sync-conflict-20260101-010101-AAA.md");
+		expect(r?.deviceId).toBe("BBB");
+	});
+
+	it("handles a file with no extension", () => {
+		const r = parseConflictPath("LICENSE.sync-conflict-20260830-143000-ABCDEF");
+		expect(r?.parentPath).toBe("LICENSE");
+	});
+
+	it("returns null for an ordinary note", () => {
+		expect(parseConflictPath("note.md")).toBeNull();
+	});
+
+	it("returns null when the timestamp is malformed", () => {
+		expect(parseConflictPath("note.sync-conflict-2026-1430-ABCDEF.md")).toBeNull();
+	});
+});
+```
+
+- [ ] **Step 3: Run it and confirm it fails**
+
+Run: `npm test -- detect`
+Expected: FAIL, `Failed to resolve import "./detect"`.
+
+- [ ] **Step 4: Implement `src/core/detect.ts`**
+
+```ts
+import type { ParsedConflict } from "./types";
+
+/**
+ * Syncthing's conflict format: `<base>.sync-conflict-<YYYYMMDD>-<HHMMSS>-<deviceId><ext>`
+ *
+ * The base group is GREEDY on purpose. A copy-of-a-copy carries several suffixes,
+ * and greedy matching strips the RIGHTMOST one, which is the most recent. Callers
+ * recurse to reach the true original.
+ */
+const CONFLICT_RE =
+	/^(?<base>.+)\.sync-conflict-(?<date>\d{8})-(?<time>\d{6})-(?<device>[A-Z0-9]+)(?<ext>\.[^.]+)?$/;
+
+export function parseConflictPath(path: string): ParsedConflict | null {
+	const slash = path.lastIndexOf("/");
+	const dir = slash === -1 ? "" : path.slice(0, slash + 1);
+	const name = slash === -1 ? path : path.slice(slash + 1);
+
+	const m = CONFLICT_RE.exec(name);
+	if (!m?.groups) return null;
+
+	const { base, date, time, device, ext } = m.groups;
+	return {
+		parentPath: `${dir}${base}${ext ?? ""}`,
+		deviceId: device,
+		date,
+		time,
+	};
+}
+```
+
+- [ ] **Step 5: Run the tests and confirm they pass**
+
+Run: `npm test -- detect`
+Expected: PASS, 6 tests.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/core/types.ts src/core/detect.ts src/core/detect.test.ts
+git commit -m "feat(core): parse Syncthing conflict filenames"
+```
+
+---
+
+### Task 3: `core/group.ts`
+
+Groups copies under their true original by recursing, then assigns a shape using the precedence from the spec: folder wins, then non-`.md`, then absent original, then normal.
+
+**Files:**
+- Create: `src/core/group.ts`, `src/core/group.test.ts`
+
+- [ ] **Step 1: Write the failing test `src/core/group.test.ts`**
+
+```ts
+import { describe, expect, it } from "vitest";
+import { groupConflicts } from "./group";
+
+/** Minimal view of the vault the grouper needs. Keeps core free of `obsidian`. */
+const vault = (files: string[], folders: string[] = []) => ({
+	files: new Set(files),
+	folders: new Set(folders),
+});
+
+describe("groupConflicts", () => {
+	it("pairs a copy with its original", () => {
+		const g = groupConflicts(
+			["note.md", "note.sync-conflict-20260830-143000-AAA.md"],
+			vault(["note.md", "note.sync-conflict-20260830-143000-AAA.md"]),
+			"Conflict Recovery",
+		);
+		expect(g).toHaveLength(1);
+		expect(g[0].originalPath).toBe("note.md");
+		expect(g[0].shape).toBe("normal");
+		expect(g[0].copies).toHaveLength(1);
+	});
+
+	it("attaches a copy-of-a-copy to the true original", () => {
+		const deep = "n.sync-conflict-20260101-010101-AAA.sync-conflict-20260202-020202-BBB.md";
+		const g = groupConflicts(["n.md", deep], vault(["n.md", deep]), "Conflict Recovery");
+		expect(g[0].originalPath).toBe("n.md");
+	});
+
+	it("marks a group orphan when the original is absent", () => {
+		const c = "gone.sync-conflict-20260830-143000-AAA.md";
+		const g = groupConflicts([c], vault([c]), "Conflict Recovery");
+		expect(g[0].shape).toBe("orphan");
+	});
+
+	it("marks non-markdown groups opaque", () => {
+		const c = "img.sync-conflict-20260830-143000-AAA.png";
+		const g = groupConflicts(["img.png", c], vault(["img.png", c]), "Conflict Recovery");
+		expect(g[0].shape).toBe("opaque");
+	});
+
+	it("folder precedence beats opaque", () => {
+		const c = "thing.sync-conflict-20260830-143000-AAA.png";
+		const g = groupConflicts([c], vault([c], ["thing.png"]), "Conflict Recovery");
+		expect(g[0].shape).toBe("blocked");
+	});
+
+	it("ignores anything inside the recovery folder", () => {
+		const c = "Conflict Recovery/x.sync-conflict-20260830-143000-AAA.md";
+		expect(groupConflicts([c], vault([c]), "Conflict Recovery")).toHaveLength(0);
+	});
+
+	it("collects several copies under one original, oldest first", () => {
+		const a = "note.sync-conflict-20260830-090000-AAA.md";
+		const b = "note.sync-conflict-20260830-143000-BBB.md";
+		const g = groupConflicts(["note.md", b, a], vault(["note.md", a, b]), "Conflict Recovery");
+		expect(g[0].copies.map((c) => c.deviceId)).toEqual(["AAA", "BBB"]);
+	});
+});
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `npm test -- group`
+Expected: FAIL, `Failed to resolve import "./group"`.
+
+- [ ] **Step 3: Implement `src/core/group.ts`**
+
+```ts
+import { parseConflictPath } from "./detect";
+import type { ConflictGroup, ConflictShape, ParsedConflictFile } from "./types";
+
+/** What the grouper needs to know about the vault. The shell supplies this. */
+export interface VaultIndex {
+	files: Set<string>;
+	folders: Set<string>;
+}
+
+/**
+ * Strip conflict suffixes until the name stops changing.
+ *
+ * NOTE: this is deterministic but not always correct. A note deliberately named
+ * `x.sync-conflict-20260101-010101-AAA.md` is indistinguishable, by filename alone,
+ * from a copy of `x.md`. No filename-only rule can tell them apart, which is why the
+ * UI always shows which files were paired and offers a view-only escape.
+ */
+function resolveOriginal(path: string): string {
+	let current = path;
+	for (;;) {
+		const parsed = parseConflictPath(current);
+		if (!parsed) return current;
+		current = parsed.parentPath;
+	}
+}
+
+function shapeFor(originalPath: string, index: VaultIndex): ConflictShape {
+	if (index.folders.has(originalPath)) return "blocked";
+	if (!originalPath.endsWith(".md")) return "opaque";
+	if (!index.files.has(originalPath)) return "orphan";
+	return "normal";
+}
+
+export function groupConflicts(
+	paths: string[],
+	index: VaultIndex,
+	recoveryFolder: string,
+): ConflictGroup[] {
+	const prefix = `${recoveryFolder}/`;
+	const byOriginal = new Map<string, ParsedConflictFile[]>();
+
+	for (const path of paths) {
+		// The recovery folder is excluded outright. The non-note extension is only
+		// defence in depth; this exclusion is the real protection against the
+		// plugin rediscovering its own artifacts.
+		if (path === recoveryFolder || path.startsWith(prefix)) continue;
+
+		const parsed = parseConflictPath(path);
+		if (!parsed) continue;
+
+		const original = resolveOriginal(path);
+		const list = byOriginal.get(original) ?? [];
+		list.push({ ...parsed, path });
+		byOriginal.set(original, list);
+	}
+
+	return [...byOriginal.entries()]
+		.map(([originalPath, copies]) => ({
+			originalPath,
+			shape: shapeFor(originalPath, index),
+			copies: copies.sort((a, b) =>
+				`${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`),
+			),
+		}))
+		.sort((a, b) => a.originalPath.localeCompare(b.originalPath));
+}
+```
+
+- [ ] **Step 4: Run the tests and confirm they pass**
+
+Run: `npm test -- group`
+Expected: PASS, 7 tests.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/core/group.ts src/core/group.test.ts
+git commit -m "feat(core): group conflict copies under their original"
+```
+
+---
+
+### Task 4: `core/entry-view.ts`
+
+Maps a group to the actions the UI may offer. Actions derive from **shape**, and an unrecognised shape falls through to view-only, so a future case can never wedge the panel into offering a destructive action.
+
+**Files:**
+- Create: `src/core/entry-view.ts`, `src/core/entry-view.test.ts`
+
+- [ ] **Step 1: Write the failing test `src/core/entry-view.test.ts`**
+
+```ts
+import { describe, expect, it } from "vitest";
+import { describeGroup } from "./entry-view";
+import type { ConflictGroup } from "./types";
+
+const group = (shape: ConflictGroup["shape"], n = 1): ConflictGroup => ({
+	originalPath: "note.md",
+	shape,
+	copies: Array.from({ length: n }, (_, i) => ({
+		path: `note.sync-conflict-2026083${i}-143000-AAA.md`,
+		parentPath: "note.md",
+		deviceId: "AAA",
+		date: `2026083${i}`,
+		time: "143000",
+	})),
+});
+
+describe("describeGroup", () => {
+	it("offers keep-original, keep-copy and save-as-new for a normal group", () => {
+		expect(describeGroup(group("normal")).actions).toEqual([
+			"keep-original",
+			"keep-copy",
+			"save-as-new",
+		]);
+	});
+
+	it("offers restore and accept-deletion for an orphan", () => {
+		expect(describeGroup(group("orphan")).actions).toEqual([
+			"restore-copy",
+			"accept-deletion",
+		]);
+	});
+
+	it("offers only move for an opaque group, and never diffs it", () => {
+		const v = describeGroup(group("opaque"));
+		expect(v.actions).toEqual(["accept-deletion"]);
+		expect(v.diffable).toBe(false);
+	});
+
+	it("offers nothing for a blocked group", () => {
+		expect(describeGroup(group("blocked")).actions).toEqual([]);
+	});
+
+	it("falls through to view-only for an unknown shape", () => {
+		const rogue = { ...group("normal"), shape: "future" as never };
+		expect(describeGroup(rogue).actions).toEqual([]);
+	});
+
+	it("warns that restoring an orphan resurrects it everywhere", () => {
+		expect(describeGroup(group("orphan")).warning).toMatch(/every device/i);
+	});
+});
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `npm test -- entry-view`
+Expected: FAIL, `Failed to resolve import "./entry-view"`.
+
+- [ ] **Step 3: Implement `src/core/entry-view.ts`**
+
+```ts
+import type { ConflictGroup } from "./types";
+
+export type EntryAction =
+	| "keep-original"
+	| "keep-copy"
+	| "save-as-new"
+	| "restore-copy"
+	| "accept-deletion";
+
+export interface EntryView {
+	actions: EntryAction[];
+	diffable: boolean;
+	/** Shown before any action that has consequences beyond this device. */
+	warning: string | null;
+	explanation: string | null;
+}
+
+export function describeGroup(group: ConflictGroup): EntryView {
+	switch (group.shape) {
+		case "normal":
+			return {
+				actions: ["keep-original", "keep-copy", "save-as-new"],
+				diffable: true,
+				warning: null,
+				explanation: null,
+			};
+
+		case "orphan":
+			return {
+				actions: ["restore-copy", "accept-deletion"],
+				diffable: false,
+				warning:
+					"Restoring recreates a file another device deliberately deleted. Syncthing will propagate that to every device.",
+				explanation: "The original no longer exists. Another device deleted it.",
+			};
+
+		case "opaque":
+			return {
+				actions: ["accept-deletion"],
+				diffable: false,
+				warning: null,
+				explanation:
+					"Not a Markdown file, so it cannot be compared or promoted. Copies can be moved to recovery.",
+			};
+
+		case "blocked":
+			return {
+				actions: [],
+				diffable: false,
+				warning: null,
+				explanation: "A folder occupies this path, so the conflict cannot be resolved here.",
+			};
+
+		default:
+			// An unrecognised shape must never reach a destructive action.
+			return { actions: [], diffable: false, warning: null, explanation: null };
+	}
+}
+```
+
+- [ ] **Step 4: Run the tests and confirm they pass**
+
+Run: `npm test -- entry-view`
+Expected: PASS, 6 tests.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/core/entry-view.ts src/core/entry-view.test.ts
+git commit -m "feat(core): derive allowed actions from group shape"
+```
+
+---
+
+### Task 5: `core/diff.ts`
+
+**Files:**
+- Create: `src/core/diff.ts`, `src/core/diff.test.ts`
+
+- [ ] **Step 1: Write the failing test `src/core/diff.test.ts`**
+
+```ts
+import { describe, expect, it } from "vitest";
+import { toHunks } from "./diff";
+
+describe("toHunks", () => {
+	it("returns no hunks for identical text", () => {
+		expect(toHunks("a\nb\n", "a\nb\n")).toEqual([]);
+	});
+
+	it("reports an added line", () => {
+		const h = toHunks("a\n", "a\nb\n");
+		expect(h).toHaveLength(1);
+		expect(h[0].right).toEqual(["b"]);
+		expect(h[0].left).toEqual([]);
+	});
+
+	it("reports a changed line as left and right together", () => {
+		const h = toHunks("gym at 6\n", "dentist 3pm\n");
+		expect(h[0].left).toEqual(["gym at 6"]);
+		expect(h[0].right).toEqual(["dentist 3pm"]);
+	});
+
+	it("stops after the hunk cap so a pathological diff cannot block the UI thread", () => {
+		const left = Array.from({ length: 5000 }, (_, i) => `l${i}`).join("\n");
+		const right = Array.from({ length: 5000 }, (_, i) => `r${i}`).join("\n");
+		expect(toHunks(left, right, 100).length).toBeLessThanOrEqual(100);
+	});
+});
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `npm test -- diff`
+Expected: FAIL, `Failed to resolve import "./diff"`.
+
+- [ ] **Step 3: Implement `src/core/diff.ts`**
+
+```ts
+import { diffLines } from "diff";
+
+export interface Hunk {
+	/** Lines present only on the left (the kept file). */
+	left: string[];
+	/** Lines present only on the right (the conflict copy). */
+	right: string[];
+}
+
+const DEFAULT_MAX_HUNKS = 500;
+
+const lines = (value: string): string[] =>
+	value.split("\n").filter((l, i, a) => !(i === a.length - 1 && l === ""));
+
+/**
+ * Line diff, capped. Android will kill the WebView if the main thread blocks long
+ * enough, so a pathological diff must degrade rather than hang. Hitting the cap
+ * means "too different to review here", which the UI states.
+ */
+export function toHunks(
+	left: string,
+	right: string,
+	maxHunks: number = DEFAULT_MAX_HUNKS,
+): Hunk[] {
+	const hunks: Hunk[] = [];
+	let pending: Hunk | null = null;
+
+	for (const part of diffLines(left, right)) {
+		if (!part.added && !part.removed) {
+			if (pending) {
+				hunks.push(pending);
+				pending = null;
+			}
+			if (hunks.length >= maxHunks) return hunks;
+			continue;
+		}
+		pending ??= { left: [], right: [] };
+		if (part.removed) pending.left.push(...lines(part.value));
+		if (part.added) pending.right.push(...lines(part.value));
+	}
+
+	if (pending) hunks.push(pending);
+	return hunks.slice(0, maxHunks);
+}
+```
+
+- [ ] **Step 4: Run the tests and confirm they pass**
+
+Run: `npm test -- diff`
+Expected: PASS, 4 tests.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/core/diff.ts src/core/diff.test.ts
+git commit -m "feat(core): capped line diff for display"
+```
+
+---
+
+### Task 6: `vault-ops.ts` and the boundary tests
+
+The only mutating module. Two invariants are enforced by a test that reads the source of every other module, because a convention nobody checks will rot.
+
+**Files:**
+- Create: `src/vault-ops.ts`, `src/boundaries.test.ts`
+
+- [ ] **Step 1: Write the failing boundary test `src/boundaries.test.ts`**
+
+```ts
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+
+const SRC = join(__dirname);
+
+const sources = (dir: string): string[] =>
+	readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+		e.isDirectory()
+			? sources(join(dir, e.name))
+			: e.name.endsWith(".ts") && !e.name.endsWith(".test.ts")
+				? [join(dir, e.name)]
+				: [],
+	);
+
+describe("boundaries", () => {
+	it("core/ never imports obsidian, so it stays unit-testable", () => {
+		for (const file of sources(join(SRC, "core"))) {
+			expect(readFileSync(file, "utf8")).not.toMatch(/from ["']obsidian["']/);
+		}
+	});
+
+	it("no module calls a deletion API anywhere", () => {
+		// The defining property of v0.1. Three of five audited plugins lost data,
+		// every one of them in a delete call.
+		for (const file of sources(SRC)) {
+			const text = readFileSync(file, "utf8");
+			expect(text).not.toMatch(/\.delete\s*\(/);
+			expect(text).not.toMatch(/trashFile\s*\(/);
+			expect(text).not.toMatch(/\.trash\s*\(/);
+		}
+	});
+
+	it("only vault-ops mutates the vault", () => {
+		for (const file of sources(SRC)) {
+			if (file.endsWith("vault-ops.ts")) continue;
+			const text = readFileSync(file, "utf8");
+			expect(text).not.toMatch(/vault\.(process|rename|create|modify)\s*\(/);
+		}
+	});
+});
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `npm test -- boundaries`
+Expected: FAIL, `ENOENT` on `src/core` is not expected (it exists); the failure will be the missing `vault-ops.ts` in the third test's scan, or a pass. If all three pass at this point, that is correct — they are guard tests. Proceed.
+
+- [ ] **Step 3: Implement `src/vault-ops.ts`**
+
+```ts
+import type { App, TFile } from "obsidian";
+
+/** Thrown when the file changed between review and write. Aborts cleanly. */
+export class StaleInput extends Error {
+	constructor(path: string) {
+		super(`${path} changed since you reviewed it. Nothing was written.`);
+	}
+}
+
+/** Thrown when a destination is occupied. Never overwrite what nobody reviewed. */
+export class DestinationOccupied extends Error {
+	constructor(path: string) {
+		super(`${path} already exists. Nothing was moved.`);
+	}
+}
+
+export class VaultOps {
+	constructor(
+		private readonly app: App,
+		private readonly recoveryFolder: string,
+	) {}
+
+	/**
+	 * Replace the original's content with a chosen copy.
+	 *
+	 * The equality check runs INSIDE the process callback, which the Obsidian
+	 * typings document as an atomic read-modify-save. Checking beforehand would
+	 * leave a window; checking inside is the precondition.
+	 */
+	async replaceOriginal(
+		original: TFile,
+		reviewedText: string,
+		chosenText: string,
+	): Promise<void> {
+		await this.app.vault.process(original, (current) => {
+			if (current !== reviewedText) throw new StaleInput(original.path);
+			return chosenText;
+		});
+	}
+
+	/**
+	 * Move a conflict copy into the recovery folder.
+	 *
+	 * A MOVE, never copy-then-delete. Whatever the file holds at rename time is
+	 * what survives, so a racing writer cannot cause loss.
+	 */
+	async moveToRecovery(copy: TFile): Promise<string> {
+		await this.ensureFolder(this.recoveryFolder);
+		const target = await this.freePath(this.recoveryPathFor(copy.path));
+		await this.app.vault.rename(copy, target);
+		return target;
+	}
+
+	/** Restore an orphan copy onto its original path. Aborts if occupied. */
+	async restoreTo(copy: TFile, originalPath: string): Promise<void> {
+		if (await this.app.vault.adapter.exists(originalPath)) {
+			// The original came back while the user was deciding. That turns an
+			// orphan into an ordinary conflict; renaming over it would destroy a
+			// note nobody reviewed.
+			throw new DestinationOccupied(originalPath);
+		}
+		await this.app.vault.rename(copy, originalPath);
+	}
+
+	/**
+	 * Archive name: `<flattened source path>.<original ext>.conflictbak`
+	 *
+	 * The full path is flattened rather than reduced to a basename, because two
+	 * `note.md` in different folders would otherwise collide in one batch. The
+	 * original extension is preserved so restore can reconstruct the real path.
+	 */
+	private recoveryPathFor(sourcePath: string): string {
+		const flat = sourcePath.replace(/\//g, "__");
+		return `${this.recoveryFolder}/${flat}.conflictbak`;
+	}
+
+	/**
+	 * Find a free destination.
+	 *
+	 * Uses the ADAPTER, not `getAbstractFileByPath`. Unsupported extensions may not
+	 * be loaded into Obsidian's vault tree, so the Vault API would report an
+	 * existing `.conflictbak` as absent and we would rename over it.
+	 */
+	private async freePath(base: string): Promise<string> {
+		if (!(await this.app.vault.adapter.exists(base))) return base;
+		const stem = base.replace(/\.conflictbak$/, "");
+		for (let n = 2; n < 1000; n++) {
+			const candidate = `${stem}-${n}.conflictbak`;
+			if (!(await this.app.vault.adapter.exists(candidate))) return candidate;
+		}
+		throw new DestinationOccupied(base);
+	}
+
+	private async ensureFolder(path: string): Promise<void> {
+		// Neither create nor rename creates parent folders.
+		if (!(await this.app.vault.adapter.exists(path))) {
+			await this.app.vault.adapter.mkdir(path);
+		}
+	}
+}
+```
+
+- [ ] **Step 4: Run the full suite**
+
+Run: `npm test`
+Expected: PASS. The boundary tests must pass with `vault-ops.ts` present, proving it is the only mutating module and that no deletion API is referenced anywhere.
+
+- [ ] **Step 5: Verify the build still type-checks**
+
+Run: `npm run build`
+Expected: exit 0.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/vault-ops.ts src/boundaries.test.ts
+git commit -m "feat: vault operations with no-clobber moves and no deletion"
+```
+
+---
+
+## Self-Review
+
+**Spec coverage.** Detection, grouping with all four shapes and precedence, action derivation, capped diffing, the atomic content replacement with its precondition, no-clobber moves via the Adapter, and both boundary invariants each have a task. The recovery Adapter decision is implemented in `freePath` and `ensureFolder`.
+
+**Not covered by this plan, deliberately:** `panel-view.ts`, `compare-view.ts`, the Recovery list UI, and wiring in `main.ts`. Those are UI and are the subject of a second plan, written once the core above is green. Tasks 1-6 produce a plugin that loads, has real identity, and carries a fully tested decision core.
+
+**Known gap to carry into the UI plan:** the editor guard (`workspace.iterateAllLeaves()`) is a shell concern and appears in neither this plan nor `vault-ops.ts`. It must gate every call into `VaultOps` from the views.
+
+**Type consistency.** `ParsedConflict`, `ParsedConflictFile`, `ConflictGroup`, `ConflictShape` and `EntryAction` are defined once in `core/types.ts` or `core/entry-view.ts` and used consistently. `groupConflicts` takes `VaultIndex`, which the shell builds from `vault.getFiles()` and `vault.getAllLoadedFiles()`.
