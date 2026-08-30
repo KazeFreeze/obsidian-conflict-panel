@@ -309,8 +309,10 @@ REST API there is no mapping, so the UI must not imply one.
 `isDesktopOnly: false`. `minAppVersion` follows the highest API actually used; `Vault.process`
 requires 1.1.0, and no trash API is used at all.
 
-- SHA-256 via **Web Crypto** for archive names. No Node `crypto`, `Buffer`, `fs`, `path`, or
-  `FileSystemAdapter`.
+- **No hashing is used anywhere.** Archive names are reversibly percent-encoded, because restore
+  has to reconstruct the source path from the name. An earlier revision required SHA-256 here and
+  that requirement is withdrawn; it contradicted the recovery section two pages earlier.
+- No Node `crypto`, `Buffer`, `fs`, `path`, or `FileSystemAdapter`.
 - Diffing bounded and yielding, so a pathological diff cannot block the WebView until Android kills it.
 - Binary conflicts are **listed with provenance** and can be moved to recovery, but not diffed.
 
