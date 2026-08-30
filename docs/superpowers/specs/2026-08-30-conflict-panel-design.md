@@ -1,4 +1,4 @@
-# Obsidian Conflict Panel — design (rev 7)
+# Obsidian Conflict Panel — design (rev 8)
 
 An Obsidian plugin that finds Syncthing `*.sync-conflict-*` files and resolves them **without
 leaving Obsidian**. Standalone repo. Desktop and Android, one responsive UI.
@@ -33,10 +33,13 @@ Five audits. Two revisions were structurally wrong and are recorded so the mista
 - **rev 6** replaced copy-then-delete with a single move. The losing file is *preserved*, not copied,
   so that window cannot exist. Audit six confirmed the rev-5 hole is closed and endorsed dropping
   pruning, but found five gaps an implementer would have had to invent answers for.
-- **rev 7** closes them: a no-clobber rule for every rename, binary groups restricted to move-only,
-  a distinct shape when the canonical path holds a folder, an in-plugin recovery reader so archived
-  files are reachable without depending on an Obsidian setting, and an honest account of where
-  filename-only grouping is ambiguous.
+- **rev 7** closed them, but its Recovery list was **circular**: it promised a reader for files the
+  same document said might stop being Vault-manageable. It also left the binary classifier, the
+  shape precedence, and restore semantics unstated.
+- **rev 8** resolves all four. The recovery folder is **Adapter-managed**, which is setting-
+  independent and sees unloaded files; the binary rule is extension-based with no sniffing; shape
+  precedence is ordered; restore is defined as a move with the original extension recovered from the
+  archive name.
 
 ## v0.1 scope
 
@@ -75,11 +78,20 @@ in recovery and can be retrieved by hand.
 
 **An orphan whose original reappears mid-decision aborts.** See the no-clobber rule.
 
-**Binary groups are move-only in v0.1.** `Vault.process` is text-only and there is no binary
+**Opaque groups are move-only in v0.1.** `Vault.process` is text-only and there is no binary
 equivalent, so "keep copy *X*" would require an unguarded `modifyBinary` with no version
-precondition. Rather than invent that, binary groups offer exactly two actions: move copies to
-recovery, or do nothing. They are listed with full provenance so you know they exist, and they are
-never diffed. Resolving a binary conflict is a v0.2 question.
+precondition. Rather than invent that, opaque groups offer exactly two actions: move copies to
+recovery, or do nothing. Listed with full provenance, never diffed.
+
+**The classifier is extension-based, with no content sniffing: `.md` is diffable, everything else is
+opaque.** Sniffing needs an exact rule and a binary-capable read path, and gets `.canvas` wrong in
+both directions — it is UTF-8 JSON, but diffing it as text produces a meaningless hunk list. Treating
+it as opaque is conservative and correct. A `.md` file containing binary bytes is the one case this
+rule mishandles; it is pathological under Syncthing and is accepted rather than solved.
+
+**Shape precedence, highest first:** canonical path holds a folder → view-only. Otherwise extension
+is not `.md` → opaque, move-only. Otherwise original absent → orphan. Otherwise → normal. Stated as
+an order because a binary conflict whose canonical path is a folder matches two rules at once.
 
 **A canonical path occupied by a folder is a distinct shape.** `original: TFile | null` collapses
 "path is free" and "path holds a `TFolder`", and restoring onto the latter would attempt to rename a
@@ -152,11 +164,23 @@ Vault-manageable after a restart, since the Vault API only exposes files loaded 
 listing, or raw filesystem access still sees them. "Absent from any template that globs the vault"
 was false.
 
-**Recovery must therefore not depend on that setting.** The panel carries a **Recovery** list that
-enumerates the folder, previews each artifact, and offers *restore as `.md`*. This is the contract
-that makes archiving safe to rely on: Obsidian cannot natively open `.conflictbak`, and on Android
-there is no application association for an invented extension, so without an in-plugin reader the
-recovery story would be "rename it by hand in a file manager", which is not a story on a phone.
+**The recovery folder is Adapter-managed, and this is the one place the plugin uses `DataAdapter`.**
+
+Rev 7 promised an in-plugin reader while also stating that unsupported files may stop being
+Vault-manageable after a restart. Those cannot both hold: a `TFile`-based reader cannot enumerate
+files that are not in the vault tree. `vault.adapter` (`list`, `read`, `readBinary`, `exists`,
+`rename`) works on paths rather than `TFile`s, so it is **independent of Show all file types** and of
+whether Obsidian loaded the file.
+
+The rest of the plugin stays Vault-managed. The Adapter is scoped to exactly one directory, which is
+also what makes the no-clobber check trustworthy: `adapter.exists()` sees an unloaded
+`.conflictbak` that `getAbstractFileByPath()` would miss and report as free.
+
+**Restore is a move, not a copy.** The archive name encodes the source path and the original
+extension, so restore reconstructs `<original path>.<original ext>` and renames the artifact back.
+If that destination is occupied, restore **aborts and says so** — never overwrites. Restoring a
+binary artifact restores its real extension; there is no "restore as `.md`", which rev 7 wrongly
+implied would work for every artifact.
 
 **Index staleness is accepted, not solved.** Renaming `.md` to an unsupported extension does not
 reliably evict the old entry: Dataview's rename handler returns early when the new path is not
