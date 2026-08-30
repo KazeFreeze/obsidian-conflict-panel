@@ -1,36 +1,39 @@
-import { App, PluginSettingTab, Setting } from 'obsidian';
-import MyPlugin from './main';
+import { App, PluginSettingTab, Setting } from "obsidian";
+import type ConflictPanelPlugin from "./main";
 
-export interface MyPluginSettings {
-	mySetting: string;
+export interface ConflictPanelSettings {
+	/** Vault-relative folder that resolved conflict copies are moved into. */
+	recoveryFolder: string;
 }
 
-export const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default',
+export const DEFAULT_SETTINGS: ConflictPanelSettings = {
+	recoveryFolder: "Conflict Recovery",
 };
 
-export class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
+export class ConflictPanelSettingTab extends PluginSettingTab {
+	plugin: ConflictPanelPlugin;
 
-	constructor(app: App, plugin: MyPlugin) {
+	constructor(app: App, plugin: ConflictPanelPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
 
 	display(): void {
 		const { containerEl } = this;
-
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Settings #1')
-			.setDesc("It's a secret")
+			.setName("Recovery folder")
+			.setDesc(
+				"Resolved conflict copies are moved here. Nothing is ever deleted, so this folder grows until you empty it yourself.",
+			)
 			.addText((text) =>
 				text
-					.setPlaceholder('Enter your secret')
-					.setValue(this.plugin.settings.mySetting)
+					.setPlaceholder("Conflict Recovery")
+					.setValue(this.plugin.settings.recoveryFolder)
 					.onChange(async (value) => {
-						this.plugin.settings.mySetting = value;
+						this.plugin.settings.recoveryFolder =
+							value.trim() || DEFAULT_SETTINGS.recoveryFolder;
 						await this.plugin.saveSettings();
 					}),
 			);

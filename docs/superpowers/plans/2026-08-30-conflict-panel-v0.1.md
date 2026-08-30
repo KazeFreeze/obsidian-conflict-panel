@@ -142,7 +142,10 @@ import {
 } from "./settings";
 
 export default class ConflictPanelPlugin extends Plugin {
-	settings: ConflictPanelSettings;
+	// Definite-assignment assertion: strict mode cannot see that onload() assigns
+	// this, because the assignment is async and outside the constructor. Without
+	// the `!` the build fails with TS2564. The official sample plugin does the same.
+	settings!: ConflictPanelSettings;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();

@@ -1,12 +1,14 @@
 {
-	"name": "obsidian-sample-plugin",
-	"version": "1.0.0",
+	"name": "obsidian-conflict-panel",
+	"version": "0.1.0",
 	"description": "This is a sample plugin for Obsidian (https://obsidian.md)",
 	"main": "main.js",
 	"type": "module",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"test": "vitest run",
+		"test:watch": "vitest",
 		"version": "node version-bump.mjs && git add manifest.json versions.json",
 		"lint": "eslint ."
 	},
@@ -22,6 +24,11 @@
 		"jiti": "^2.6.1",
 		"obsidian": "latest",
 		"typescript": "^5.8.3",
-		"typescript-eslint": "^8.59.1"
+		"typescript-eslint": "^8.59.1",
+		"vitest": "^4.1.11"
+	},
+	"dependencies": {
+		"@types/diff": "^7.0.2",
+		"diff": "^9.0.0"
 	}
 }

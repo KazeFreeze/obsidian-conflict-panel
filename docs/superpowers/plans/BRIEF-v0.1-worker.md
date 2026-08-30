@@ -37,10 +37,16 @@ preferences.
    vault tree, so the Vault API would report an existing file as absent and you would
    rename over it.
 
-## If you get stuck
+## When to stop, and when to just fix it
 
-Do not guess at design decisions. The spec is the authority; if the spec and the plan
-disagree, stop and say so rather than picking one.
+**Stop and announce** for: a spec/plan disagreement, a design decision the plan does not
+settle, or an environment failure you cannot resolve (network, missing tool, permissions).
+The spec is the authority; if the spec and the plan disagree, never pick one yourself.
+
+**Do not stop** for a mechanical compile, type or lint error with one obvious correction —
+a missing definite-assignment `!`, an import path, a type annotation. Fix it, keep going,
+and list every such fix in your final report so the plan can be corrected. Three stops so
+far and only two of them needed a human; that round trip is not free.
 
 Announce a block so the orchestrator sees it with a reason attached:
 
