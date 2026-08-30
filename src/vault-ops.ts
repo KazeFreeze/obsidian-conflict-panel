@@ -51,12 +51,22 @@ export class VaultOps {
 		return target;
 	}
 
-	/** Restore an orphan copy onto its original path. Aborts if occupied. */
+	/**
+	 * Restore an orphan copy onto its original path when both checks find it free.
+	 *
+	 * The public API has no atomic no-clobber rename. The second check narrows the
+	 * window as far as possible, but a writer can still appear after it and before
+	 * rename. Callers must not claim this residual race is closed.
+	 */
 	async restoreTo(copy: TFile, originalPath: string): Promise<void> {
 		if (await this.app.vault.adapter.exists(originalPath)) {
 			// The original came back while the user was deciding. That turns an
 			// orphan into an ordinary conflict; renaming over it would destroy a
 			// note nobody reviewed.
+			throw new DestinationOccupied(originalPath);
+		}
+		// Re-check immediately before rename. Nothing fallible belongs between these.
+		if (await this.app.vault.adapter.exists(originalPath)) {
 			throw new DestinationOccupied(originalPath);
 		}
 		await this.app.vault.rename(copy, originalPath);
@@ -96,6 +106,8 @@ export class VaultOps {
 	 * Uses the ADAPTER, not `getAbstractFileByPath`. Unsupported extensions may not
 	 * be loaded into Obsidian's vault tree, so the Vault API would report an
 	 * existing `.conflictbak` as absent and we would rename over it.
+	 * The exists-to-rename race remains here too; it is accepted for recovery
+	 * because a collision can duplicate an artifact but cannot destroy the source.
 	 */
 	private async freePath(base: string): Promise<string> {
 		if (!(await this.app.vault.adapter.exists(base))) return base;

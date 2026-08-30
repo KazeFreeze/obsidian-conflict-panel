@@ -1,6 +1,6 @@
 import type { App, TFile } from "obsidian";
 import { describe, expect, it, vi } from "vitest";
-import { VaultOps } from "./vault-ops";
+import { DestinationOccupied, VaultOps } from "./vault-ops";
 
 const file = (path: string): TFile => ({ path }) as TFile;
 
@@ -38,5 +38,24 @@ describe("VaultOps recovery path encoding", () => {
 
 		if (marker) expect(recoveryPath).toContain(`${marker}.conflictbak`);
 		expect(VaultOps.sourcePathFromRecovery(recoveryPath)).toBe(source);
+	});
+});
+
+describe("VaultOps restore", () => {
+	it("re-checks the destination immediately before rename", async () => {
+		const exists = vi
+			.fn<(path: string) => Promise<boolean>>()
+			.mockResolvedValueOnce(false)
+			.mockResolvedValueOnce(true);
+		const rename = vi.fn(async () => undefined);
+		const app = {
+			vault: { adapter: { exists }, rename },
+		} as unknown as App;
+
+		await expect(
+			new VaultOps(app, "Recovery").restoreTo(file("copy.md"), "original.md"),
+		).rejects.toBeInstanceOf(DestinationOccupied);
+		expect(exists).toHaveBeenCalledTimes(2);
+		expect(rename).not.toHaveBeenCalled();
 	});
 });

@@ -123,11 +123,11 @@ rename to a path it has not just found free. `freePathNear` appends `-2`, `-3` a
 `getAbstractFileByPath` returns null.
 
 That narrows the race without closing it, which is acceptable in the recovery folder: a collision
-there costs a duplicate artifact, not data. It is **not** acceptable for orphan restoration, where
-the destination is a real note path. There the rule is stricter: **if the original path is occupied at
-the moment of restore, abort and re-present the group.** An occupied path means the original came
-back while the user was deciding, which turns an orphan into an ordinary conflict, and silently
-renaming over it would destroy a note nobody reviewed.
+there costs a duplicate artifact, not data. Orphan restoration is stricter: it checks once when the
+operation starts and again immediately before `vault.rename`; if either check finds the original,
+it aborts and re-presents the group. The public API cannot make that check and rename atomic. If the
+original reappears after the final check, the rename may still overwrite a note nobody reviewed.
+This residual race is narrowed as far as the API permits, not claimed to be closed.
 
 **Exact string equality, not SHA-256.** The reviewed text is already retained for the diff.
 
@@ -178,9 +178,10 @@ also what makes the no-clobber check trustworthy: `adapter.exists()` sees an unl
 
 **Restore is a move, not a copy.** The archive name encodes the source path and the original
 extension, so restore reconstructs `<original path>.<original ext>` and renames the artifact back.
-If that destination is occupied, restore **aborts and says so** — never overwrites. Restoring a
-binary artifact restores its real extension; there is no "restore as `.md`", which rev 7 wrongly
-implied would work for every artifact.
+If either destination check observes an occupied path, restore **aborts and says so**. A writer can
+still appear after the final check; the failure table records that residual race. Restoring a binary
+artifact restores its real extension; there is no "restore as `.md`", which rev 7 wrongly implied
+would work for every artifact.
 
 **Index staleness is accepted, not solved.** Renaming `.md` to an unsupported extension does not
 reliably evict the old entry: Dataview's rename handler returns early when the new path is not
@@ -246,6 +247,7 @@ file* stays inside the excluded folder and is excluded too. Regression test requ
 | `process` succeeds, then app dies | resolved original, copies unmoved — benign, rediscovered |
 | a copy changes between review and move | the *current* content is moved, not the reviewed content |
 | `rename` throws on one copy | that copy stays, others still processed |
+| original reappears after restore's final check | **can be overwritten**; public API has no atomic no-clobber rename |
 | later editor autosave lands | **can overwrite the result** |
 
 Three are genuinely harmful and all three are writes, not deletes. They are narrowed, not
@@ -285,8 +287,9 @@ diff), `vault-ops.ts` (the only module permitted to write, move or create), `not
 3. **Input-version precondition.** The only content replacement checks equality against the reviewed
    text, inside `process`.
 4. **Cleanup preserves.** Copies are moved, never copied-then-removed.
-5. **No rename targets an occupied path.** Destinations are checked immediately before the move. In
-   the recovery folder a collision yields a suffixed name; on a real note path it aborts.
+5. **Check every rename destination immediately before the move.** In the recovery folder a
+   collision yields a suffixed name; on a real note path either observed collision aborts. The
+   check-to-rename race cannot be closed with the public API.
 6. **Refuse while any group file is open in an editor.**
 7. **Resurrection is warned.** Restoring an orphan copy to its original path states plainly that it
    propagates to every device.
