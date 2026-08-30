@@ -187,9 +187,18 @@ reliably evict the old entry: Dataview's rename handler returns early when the n
 Markdown, so a stale entry can survive until reinitialisation. The panel says so rather than
 pretending the transition is clean.
 
-**Names encode a hash of the full source path**, not the basename, because two `note.md` in different
-folders would otherwise collide in a single batch. Parent folders are created explicitly; neither
-`vault.create` nor `vault.rename` creates them.
+**Names encode the full source path reversibly**, not the basename, because two `note.md` in
+different folders would otherwise collide in a single batch.
+
+Rev 8 said "a hash of the full source path" here while also requiring restore to *reconstruct* the
+original path from the name. **A hash is not reversible, so those two requirements contradicted each
+other**, and six adversarial audits missed it. It was caught during implementation.
+
+The encoding is percent-style: `%` becomes `%25` first, then `/` becomes `%2F`. Escaping the escape
+character first is what makes it unambiguous — a naive `/` → `__` flattening collides, since
+`a__b/note.md` and `a/b__note.md` produce the same string. Restore decodes in reverse.
+
+Parent folders are created explicitly; neither `vault.create` nor `vault.rename` creates them.
 
 **Nothing prunes it.** No retention, no automatic deletion, no clock-skew hazard, and no need to tell
 a user's note apart from an artifact. The folder grows and the user empties it by hand whenever they

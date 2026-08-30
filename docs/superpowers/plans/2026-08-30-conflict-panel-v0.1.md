@@ -875,15 +875,27 @@ export class VaultOps {
 	}
 
 	/**
-	 * Archive name: `<flattened source path>.<original ext>.conflictbak`
+	 * Archive name: `<percent-encoded source path>.conflictbak`
 	 *
-	 * The full path is flattened rather than reduced to a basename, because two
+	 * The full path is encoded rather than reduced to a basename, because two
 	 * `note.md` in different folders would otherwise collide in one batch. The
-	 * original extension is preserved so restore can reconstruct the real path.
+	 * encoding is REVERSIBLE so restore can reconstruct the real path; a hash
+	 * could not, which is the contradiction this replaced.
 	 */
 	private recoveryPathFor(sourcePath: string): string {
-		const flat = sourcePath.replace(/\//g, "__");
+		// Percent-style and REVERSIBLE, because restore has to reconstruct the real
+		// path from this name. Escape the escape character first: a naive `/`->`__`
+		// makes `a__b/note.md` and `a/b__note.md` collide.
+		const flat = sourcePath.replace(/%/g, "%25").replace(/\//g, "%2F");
 		return `${this.recoveryFolder}/${flat}.conflictbak`;
+	}
+
+	/** Inverse of recoveryPathFor. Decode in reverse order. */
+	static sourcePathFromRecovery(recoveryName: string): string {
+		return recoveryName
+			.replace(/\.conflictbak$/, "")
+			.replace(/%2F/g, "/")
+			.replace(/%25/g, "%");
 	}
 
 	/**
