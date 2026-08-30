@@ -1,8 +1,12 @@
 import type { App, TFile } from "obsidian";
 import { describe, expect, it, vi } from "vitest";
-import { DestinationOccupied, VaultOps } from "./vault-ops";
+import { DestinationOccupied, StaleInput, VaultOps } from "./vault-ops";
 
 const file = (path: string): TFile => ({ path }) as TFile;
+
+// These fakes establish our control flow and preconditions only. They cannot
+// prove rename atomicity, cache invalidation, editor behaviour, process death,
+// or races against a real Obsidian adapter.
 
 async function archiveAtCollision(sourcePath: string, collisionNumber: number): Promise<string> {
 	let candidateChecks = 0;
@@ -42,6 +46,21 @@ describe("VaultOps recovery path encoding", () => {
 });
 
 describe("VaultOps restore", () => {
+	it("aborts when the destination is already occupied", async () => {
+		const rename = vi.fn(async () => undefined);
+		const app = {
+			vault: {
+				adapter: { exists: vi.fn(async () => true) },
+				rename,
+			},
+		} as unknown as App;
+
+		await expect(
+			new VaultOps(app, "Recovery").restoreTo(file("copy.md"), "original.md"),
+		).rejects.toBeInstanceOf(DestinationOccupied);
+		expect(rename).not.toHaveBeenCalled();
+	});
+
 	it("re-checks the destination immediately before rename", async () => {
 		const exists = vi
 			.fn<(path: string) => Promise<boolean>>()
@@ -57,6 +76,58 @@ describe("VaultOps restore", () => {
 		).rejects.toBeInstanceOf(DestinationOccupied);
 		expect(exists).toHaveBeenCalledTimes(2);
 		expect(rename).not.toHaveBeenCalled();
+	});
+});
+
+describe("VaultOps content replacement", () => {
+	it("rejects stale reviewed text without returning replacement content", async () => {
+		const replacements: string[] = [];
+		const process = vi.fn(
+			async (_original: TFile, update: (current: string) => string) => {
+				replacements.push(update("changed since review"));
+			},
+		);
+		const app = { vault: { process } } as unknown as App;
+
+		await expect(
+			new VaultOps(app, "Recovery").replaceOriginal(
+				file("original.md"),
+				"reviewed text",
+				"chosen text",
+			),
+		).rejects.toBeInstanceOf(StaleInput);
+		expect(replacements).toEqual([]);
+	});
+});
+
+describe("VaultOps batch recovery", () => {
+	it("reports one failed move and continues with the remaining copies", async () => {
+		const rename = vi.fn(async (copy: TFile) => {
+			if (copy.path === "bad.md") throw new Error("move failed");
+		});
+		const app = {
+			vault: {
+				adapter: {
+					exists: vi.fn(async (path: string) => path === "Recovery"),
+					mkdir: vi.fn(async () => undefined),
+				},
+				rename,
+			},
+		} as unknown as App;
+
+		const results = await new VaultOps(app, "Recovery").moveAllToRecovery([
+			file("first.md"),
+			file("bad.md"),
+			file("last.md"),
+		]);
+
+		expect(rename).toHaveBeenCalledTimes(3);
+		expect(results.map((result) => result.status)).toEqual(["moved", "failed", "moved"]);
+		const failed = results[1];
+		expect(failed?.status).toBe("failed");
+		if (failed?.status !== "failed") return;
+		expect(failed.copy.path).toBe("bad.md");
+		expect(failed.error).toBeInstanceOf(Error);
 	});
 });
 

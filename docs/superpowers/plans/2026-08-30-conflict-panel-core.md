@@ -903,6 +903,10 @@ export class DestinationOccupied extends Error {
 	}
 }
 
+export type RecoveryMoveResult =
+	| { copy: TFile; status: "moved"; recoveryPath: string }
+	| { copy: TFile; status: "failed"; error: unknown };
+
 export class VaultOps {
 	constructor(
 		private readonly app: App,
@@ -938,6 +942,20 @@ export class VaultOps {
 		const target = await this.freePath(this.recoveryPathFor(copy.path));
 		await this.app.vault.rename(copy, target);
 		return target;
+	}
+
+	/** Move every copy independently so one adapter failure cannot abort the batch. */
+	async moveAllToRecovery(copies: TFile[]): Promise<RecoveryMoveResult[]> {
+		const results: RecoveryMoveResult[] = [];
+		for (const copy of copies) {
+			try {
+				const recoveryPath = await this.moveToRecovery(copy);
+				results.push({ copy, status: "moved", recoveryPath });
+			} catch (error) {
+				results.push({ copy, status: "failed", error });
+			}
+		}
+		return results;
 	}
 
 	/**
@@ -1023,17 +1041,24 @@ export class VaultOps {
 }
 ```
 
-- [ ] **Step 4: Run the full suite**
+- [ ] **Step 4: Add behavioural tests in `src/vault-ops.test.ts`**
+
+Use a fake `App`/adapter to cover the stale equality precondition, collision path selection,
+occupied restoration, nested parent creation, and `moveAllToRecovery` continuing after one copy
+fails. State beside the fakes that they establish control flow only: they cannot prove rename
+atomicity, cache invalidation, editor behaviour, process death, or real-adapter races.
+
+- [ ] **Step 5: Run the full suite**
 
 Run: `npm test`
 Expected: PASS. These source-spelling guards catch common literal deletion and mutation forms. They are not proof against aliases or computed access, and can false-positive on comments.
 
-- [ ] **Step 5: Verify the build still type-checks**
+- [ ] **Step 6: Verify the build still type-checks**
 
 Run: `npm run build`
 Expected: exit 0.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add src/vault-ops.ts src/boundaries.test.ts

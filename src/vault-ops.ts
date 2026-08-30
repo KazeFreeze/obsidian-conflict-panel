@@ -14,6 +14,10 @@ export class DestinationOccupied extends Error {
 	}
 }
 
+export type RecoveryMoveResult =
+	| { copy: TFile; status: "moved"; recoveryPath: string }
+	| { copy: TFile; status: "failed"; error: unknown };
+
 export class VaultOps {
 	constructor(
 		private readonly app: App,
@@ -49,6 +53,20 @@ export class VaultOps {
 		const target = await this.freePath(this.recoveryPathFor(copy.path));
 		await this.app.vault.rename(copy, target);
 		return target;
+	}
+
+	/** Move every copy independently so one adapter failure cannot abort the batch. */
+	async moveAllToRecovery(copies: TFile[]): Promise<RecoveryMoveResult[]> {
+		const results: RecoveryMoveResult[] = [];
+		for (const copy of copies) {
+			try {
+				const recoveryPath = await this.moveToRecovery(copy);
+				results.push({ copy, status: "moved", recoveryPath });
+			} catch (error) {
+				results.push({ copy, status: "failed", error });
+			}
+		}
+		return results;
 	}
 
 	/**
