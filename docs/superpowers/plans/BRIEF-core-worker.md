@@ -1,8 +1,8 @@
-# Brief: implement Conflict Panel v0.1
+# Brief: implement the Conflict Panel core phase
 
 You are implementing an Obsidian plugin. Everything you need is in this repo.
 
-**Your plan:** `docs/superpowers/plans/2026-08-30-conflict-panel-v0.1.md`
+**Your plan:** `docs/superpowers/plans/2026-08-30-conflict-panel-core.md`
 **The spec it came from:** `docs/superpowers/specs/2026-08-30-conflict-panel-design.md`
 
 Read the plan in full before touching anything. It has 6 tasks and 36 steps, and every
@@ -52,7 +52,7 @@ Announce a block so the orchestrator sees it with a reason attached:
 
 ```bash
 /home/bernardjr/.claude/skills/orchestrating-herdr-agents/scripts/herdr-say.sh \
-  --state blocked --task conflict-panel-v0.1 --why "<one line: what you need>"
+  --state blocked --task conflict-panel-core --why "<one line: what you need>"
 ```
 
 ## Definition of done

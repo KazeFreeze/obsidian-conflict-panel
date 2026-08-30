@@ -1,8 +1,12 @@
-# Conflict Panel v0.1 Implementation Plan
+# Conflict Panel — core phase implementation plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** An Obsidian plugin that lists Syncthing `*.sync-conflict-*` files in a sidebar, shows a read-only diff, and resolves them by whole-file pick, moving the losing copy into a recovery folder.
+**Goal:** The tested decision core and vault-operations layer for that plugin. **This is not a
+usable plugin.** It deliberately stops before the UI, so nothing calls `VaultOps` and the plugin
+cannot touch a vault. The sidebar, compare view, Recovery list and editor guard are a second plan.
+
+The full v0.1 product is described in the spec; this plan builds roughly its lower half.
 
 **Architecture:** Pure decision modules under `src/core/` with no `obsidian` import, unit-tested with vitest. A thin Obsidian shell wires them to views. `src/vault-ops.ts` is the only module permitted to mutate the vault, and the plugin calls no deletion API at all. The recovery folder is the single place using `DataAdapter`, because unsupported files may not be in Obsidian's vault tree.
 
