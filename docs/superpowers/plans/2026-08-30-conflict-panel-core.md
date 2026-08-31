@@ -6,6 +6,9 @@
 usable plugin.** It deliberately stops before the UI, so nothing calls `VaultOps` and the plugin
 cannot touch a vault. The sidebar, compare view, Recovery list and editor guard are a second plan.
 
+**Known UI limitation:** `toHunks` is synchronous and bounded-but-blocking. The later compare-view
+plan must not call it on the main thread for accepted-but-large input without its own guard.
+
 The full v0.1 product is described in the spec; this plan builds roughly its lower half.
 
 **Architecture:** Pure decision modules under `src/core/` with no `obsidian` import, unit-tested with vitest. A thin Obsidian shell wires them to views. `src/vault-ops.ts` is the only module permitted to mutate the vault, and the plugin calls no deletion API at all. The recovery folder is the single place using `DataAdapter`, because unsupported files may not be in Obsidian's vault tree.
@@ -685,15 +688,15 @@ import { describe, expect, it } from "vitest";
 import { toHunks } from "./diff";
 
 describe("toHunks", () => {
-	it("returns no hunks for identical text", async () => {
-		expect(await toHunks("a\nb\n", "a\nb\n")).toEqual({
+	it("returns no hunks for identical text", () => {
+		expect(toHunks("a\nb\n", "a\nb\n")).toEqual({
 			status: "ok",
 			hunks: [],
 		});
 	});
 
-	it("reports an added line", async () => {
-		const result = await toHunks("a\n", "a\nb\n");
+	it("reports an added line", () => {
+		const result = toHunks("a\n", "a\nb\n");
 		expect(result.status).toBe("ok");
 		if (result.status !== "ok") return;
 		const h = result.hunks;
@@ -702,8 +705,8 @@ describe("toHunks", () => {
 		expect(h[0]!.left).toEqual([]);
 	});
 
-	it("reports a changed line as left and right together", async () => {
-		const result = await toHunks("gym at 6\n", "dentist 3pm\n");
+	it("reports a changed line as left and right together", () => {
+		const result = toHunks("gym at 6\n", "dentist 3pm\n");
 		expect(result.status).toBe("ok");
 		if (result.status !== "ok") return;
 		const h = result.hunks;
@@ -711,13 +714,24 @@ describe("toHunks", () => {
 		expect(h[0]!.right).toEqual(["dentist 3pm"]);
 	});
 
-	it("rejects pathological input before diffing in well under a second", async () => {
+	it("rejects pathological input before diffing in well under a second", () => {
 		const left = Array.from({ length: 5000 }, (_, i) => `l${i}`).join("\n");
 		const right = Array.from({ length: 5000 }, (_, i) => `r${i}`).join("\n");
 		const started = performance.now();
 
-		expect(await toHunks(left, right, 100)).toEqual({ status: "too-large" });
+		expect(toHunks(left, right, 100)).toEqual({ status: "too-large" });
 		expect(performance.now() - started).toBeLessThan(250);
+	});
+
+	it("completes accepted worst-case blocking work within 500ms", () => {
+		const left = Array.from({ length: 1000 }, (_, i) => `left-${i}`).join("\n");
+		const right = Array.from({ length: 1000 }, (_, i) => `right-${i}`).join("\n");
+		const started = performance.now();
+
+		expect(toHunks(left, right, 100).status).toBe("ok");
+		// Measured worst case is about 180ms today; 500ms leaves CI headroom while
+		// making a meaningful regression visible.
+		expect(performance.now() - started).toBeLessThan(500);
 	});
 });
 ```
@@ -762,18 +776,16 @@ function inputTooLarge(value: string): boolean {
 }
 
 /**
- * Line diff with bounded input and output. Oversized input is rejected before
- * jsdiff sees it, and accepted work yields once before running so the WebView can
- * render. The UI maps `too-large` to "too large to compare here".
+ * Synchronous line diff with bounded input and output. Oversized input is rejected
+ * before jsdiff sees it, but accepted work is blocking: jsdiff does not expose a
+ * chunked API. The UI maps `too-large` to "too large to compare here".
  */
-export async function toHunks(
+export function toHunks(
 	left: string,
 	right: string,
 	maxHunks: number = DEFAULT_MAX_HUNKS,
-): Promise<DiffResult> {
+): DiffResult {
 	if (inputTooLarge(left) || inputTooLarge(right)) return { status: "too-large" };
-
-	await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 	const hunks: Hunk[] = [];
 	let pending: Hunk | null = null;

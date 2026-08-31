@@ -30,18 +30,16 @@ function inputTooLarge(value: string): boolean {
 }
 
 /**
- * Line diff with bounded input and output. Oversized input is rejected before
- * jsdiff sees it, and accepted work yields once before running so the WebView can
- * render. The UI maps `too-large` to "too large to compare here".
+ * Synchronous line diff with bounded input and output. Oversized input is rejected
+ * before jsdiff sees it, but accepted work is blocking: jsdiff does not expose a
+ * chunked API. The UI maps `too-large` to "too large to compare here".
  */
-export async function toHunks(
+export function toHunks(
 	left: string,
 	right: string,
 	maxHunks: number = DEFAULT_MAX_HUNKS,
-): Promise<DiffResult> {
+): DiffResult {
 	if (inputTooLarge(left) || inputTooLarge(right)) return { status: "too-large" };
-
-	await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 	const hunks: Hunk[] = [];
 	let pending: Hunk | null = null;
