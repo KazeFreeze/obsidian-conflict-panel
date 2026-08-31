@@ -109,15 +109,19 @@ Android.
 
 ```ts
 import { describe, expect, it, vi } from "vitest";
+
+const { MockTFile, MockTFolder } = vi.hoisted(() => ({
+	MockTFile: class { constructor(readonly path: string) {} },
+	MockTFolder: class { constructor(readonly path: string) {} },
+}));
+vi.mock("obsidian", () => ({ TFile: MockTFile, TFolder: MockTFolder }));
+
 import { buildVaultIndex } from "./scan";
 
 describe("buildVaultIndex", () => {
 	it("separates files from folders", () => {
 		const vault = {
-			getAllLoadedFiles: () => [
-				{ path: "note.md", extension: "md" },
-				{ path: "folder", children: [] },
-			],
+			getAllLoadedFiles: () => [new MockTFile("note.md"), new MockTFolder("folder")],
 		};
 		const index = buildVaultIndex(vault as never);
 		expect(index.files.has("note.md")).toBe(true);
@@ -141,7 +145,7 @@ Expected: FAIL, `Failed to resolve import "./scan"`.
 - [ ] **Step 3: Implement `src/scan.ts`**
 
 ```ts
-import { TFile, TFolder, Vault } from "obsidian";
+import { TFile, TFolder, type Vault } from "obsidian";
 import { groupConflicts } from "./core/group";
 import type { ConflictGroup } from "./core/types";
 
