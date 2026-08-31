@@ -365,7 +365,9 @@ requires 1.1.0, and no trash API is used at all.
   displayed lines are rejected before jsdiff; a terminal newline does not count as an extra empty
   line. Accepted worst-case input has a 500ms regression budget.
   This is not cooperative yielding: the compare-view plan inherits a known limitation and must not
-  call `toHunks` on the main thread for accepted-but-large input without an additional UI guard.
+  call `toHunks` on the main thread above the measured soft band (94,500 characters or 945 lines)
+  without an additional UI guard. The committed benchmark measured about 196ms immediately below
+  that band, 219ms just above it, and 266ms at the accepted hard corner on 2026-08-31.
 - Binary conflicts are **listed with provenance** and can be moved to recovery, but not diffed.
 
 ## Non-goals

@@ -38,13 +38,17 @@ describe("toHunks", () => {
 	});
 
 	it("completes accepted worst-case blocking work within 500ms", () => {
-		const left = Array.from({ length: 1000 }, (_, i) => `left-${i}`).join("\n");
-		const right = Array.from({ length: 1000 }, (_, i) => `right-${i}`).join("\n");
+		const left = Array.from({ length: 1000 }, (_, i) => `left-${i}`.padEnd(99, "l")).join(
+			"\n",
+		);
+		const right = Array.from({ length: 1000 }, (_, i) => `right-${i}`.padEnd(99, "r")).join(
+			"\n",
+		);
 		const started = performance.now();
 
 		expect(toHunks(left, right, 100).status).toBe("ok");
-		// Measured worst case is about 180ms today; 500ms leaves CI headroom while
-		// making a meaningful regression visible.
+		// The committed benchmark measures this exact hard-corner shape. The 500ms
+		// budget leaves CI headroom while making a meaningful regression visible.
 		expect(performance.now() - started).toBeLessThan(500);
 	});
 
@@ -67,24 +71,24 @@ describe("needsConfirmation", () => {
 	});
 
 	it("asks before comparing input past the soft character band", () => {
-		expect(needsConfirmation("x".repeat(25_001), "y")).toBe(true);
+		expect(needsConfirmation("x".repeat(94_501), "y")).toBe(true);
 	});
 
 	it("asks before comparing newline-terminated input past the soft line band", () => {
-		expect(needsConfirmation("x\n".repeat(251), "y")).toBe(true);
+		expect(needsConfirmation("x\n".repeat(946), "y")).toBe(true);
 	});
 
 	it("asks before comparing non-terminated input past the soft line band", () => {
-		expect(needsConfirmation(Array.from({ length: 251 }, () => "x").join("\n"), "y")).toBe(
+		expect(needsConfirmation(Array.from({ length: 946 }, () => "x").join("\n"), "y")).toBe(
 			true,
 		);
 	});
 
 	it("asks when only the right side is large", () => {
-		expect(needsConfirmation("y", "x".repeat(25_001))).toBe(true);
+		expect(needsConfirmation("y", "x".repeat(94_501))).toBe(true);
 	});
 
 	it("does not ask exactly at the band", () => {
-		expect(needsConfirmation("x".repeat(25_000), "y")).toBe(false);
+		expect(needsConfirmation("x".repeat(94_500), "y")).toBe(false);
 	});
 });

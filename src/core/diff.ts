@@ -17,11 +17,11 @@ const DEFAULT_MAX_HUNKS = 500;
 const MAX_INPUT_CHARS = 100_000;
 const MAX_INPUT_LINES = 1_000;
 
-// A quarter of the hard limit. Below this the diff is cheap enough to run
-// unannounced; above it the freeze is noticeable, so the user asks for it and
-// can attribute the pause. toHunks still rejects anything past MAX_INPUT_*.
-const SOFT_INPUT_CHARS = 25_000;
-const SOFT_INPUT_LINES = 250;
+// The committed benchmark uses fully changed 99-character lines. On 2026-08-31,
+// 94,499 chars / 945 lines averaged 196ms and 94,999 / 950 averaged 219ms;
+// the accepted hard corner averaged 266ms. Prompt beyond the last sub-200ms case.
+const SOFT_INPUT_CHARS = 94_500;
+const SOFT_INPUT_LINES = 945;
 
 const lines = (value: string): string[] =>
 	value.split("\n").filter((l, i, a) => !(i === a.length - 1 && l === ""));

@@ -306,7 +306,7 @@ Expected: PASS, 5 tests.
 
 ```bash
 git add src/editor-guard.ts src/editor-guard.test.ts
-git commit -m "feat: refuse to resolve while a group file is open in an editor"
+git commit -m "feat: narrow conflict actions around files open in editors"
 ```
 
 ---
@@ -317,7 +317,9 @@ The UI guard the spec asks for, kept in `core/` because it is a pure predicate a
 next to the thresholds it shadows.
 
 **Files:**
+- Create: `src/core/diff.bench.ts`
 - Modify: `src/core/diff.ts`, `src/core/diff.test.ts`
+- Modify: `package.json`
 
 - [ ] **Step 1: Add the failing tests to `src/core/diff.test.ts`**
 
@@ -330,23 +332,23 @@ describe("needsConfirmation", () => {
 	});
 
 	it("asks before comparing input past the soft character band", () => {
-		expect(needsConfirmation("x".repeat(25_001), "y")).toBe(true);
+		expect(needsConfirmation("x".repeat(94_501), "y")).toBe(true);
 	});
 
 	it("asks before comparing input past the soft line band", () => {
-		expect(needsConfirmation("x\n".repeat(251), "y")).toBe(true);
+		expect(needsConfirmation("x\n".repeat(946), "y")).toBe(true);
 	});
 
-	it("asks for 251 lines without a terminating newline", () => {
-		expect(needsConfirmation(Array.from({ length: 251 }, () => "x").join("\n"), "y")).toBe(true);
+	it("asks past the soft band without a terminating newline", () => {
+		expect(needsConfirmation(Array.from({ length: 946 }, () => "x").join("\n"), "y")).toBe(true);
 	});
 
 	it("asks when only the right side is large", () => {
-		expect(needsConfirmation("y", "x".repeat(25_001))).toBe(true);
+		expect(needsConfirmation("y", "x".repeat(94_501))).toBe(true);
 	});
 
 	it("does not ask exactly at the band", () => {
-		expect(needsConfirmation("x".repeat(25_000), "y")).toBe(false);
+		expect(needsConfirmation("x".repeat(94_500), "y")).toBe(false);
 	});
 });
 ```
@@ -359,11 +361,11 @@ Expected: FAIL, `needsConfirmation is not a function`.
 - [ ] **Step 3: Implement it**
 
 ```ts
-// A quarter of the hard limit. Below this the diff is cheap enough to run
-// unannounced; above it the 500ms freeze is noticeable, so the user asks for it
-// and can attribute the pause. toHunks still rejects anything past MAX_INPUT_*.
-const SOFT_INPUT_CHARS = 25_000;
-const SOFT_INPUT_LINES = 250;
+// The committed benchmark uses fully changed 99-character lines. On 2026-08-31,
+// 94,499 chars / 945 lines averaged 196ms and 94,999 / 950 averaged 219ms;
+// the accepted hard corner averaged 266ms. Prompt beyond the last sub-200ms case.
+const SOFT_INPUT_CHARS = 94_500;
+const SOFT_INPUT_LINES = 945;
 
 const pastSoftBand = (value: string): boolean => {
 	if (value.length > SOFT_INPUT_CHARS) return true;
@@ -387,15 +389,23 @@ export function needsConfirmation(left: string, right: string): boolean {
 }
 ```
 
-- [ ] **Step 4: Run and confirm they pass**
+- [ ] **Step 4: Benchmark the measured boundary**
+
+Add `src/core/diff.bench.ts`, using fully changed 99-character lines from 900 through 1,000
+lines per side, and add `npm run bench:diff`. The 2026-08-31 measurement crossed 200ms between
+945 lines / 94,499 characters (196ms mean) and 950 lines / 94,999 characters (219ms mean);
+the 1,000-line / 99,999-character hard corner averaged 266ms. Those measurements are why the
+confirmation remains and why the constants above sit at 94,500 characters / 945 lines.
+
+- [ ] **Step 5: Run and confirm they pass**
 
 Run: `npm test -- diff`
 Expected: PASS, existing tests plus 5.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/core/diff.ts src/core/diff.test.ts
+git add src/core/diff.ts src/core/diff.test.ts src/core/diff.bench.ts package.json
 git commit -m "feat: make an expensive diff user-initiated rather than automatic"
 ```
 
