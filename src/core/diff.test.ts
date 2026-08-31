@@ -47,4 +47,16 @@ describe("toHunks", () => {
 		// making a meaningful regression visible.
 		expect(performance.now() - started).toBeLessThan(500);
 	});
+
+	it("accepts exactly 1,000 newline-terminated lines", () => {
+		const input = Array.from({ length: 1000 }, (_, i) => `line-${i}`).join("\n") + "\n";
+
+		expect(toHunks(input, input).status).toBe("ok");
+	});
+
+	it("rejects 1,001 newline-terminated lines", () => {
+		const input = Array.from({ length: 1001 }, (_, i) => `line-${i}`).join("\n") + "\n";
+
+		expect(toHunks(input, input)).toEqual({ status: "too-large" });
+	});
 });

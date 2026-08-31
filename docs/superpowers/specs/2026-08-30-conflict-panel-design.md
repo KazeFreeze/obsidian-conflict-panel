@@ -327,7 +327,8 @@ requires 1.1.0, and no trash API is used at all.
   that requirement is withdrawn; it contradicted the recovery section two pages earlier.
 - No Node `crypto`, `Buffer`, `fs`, `path`, or `FileSystemAdapter`.
 - Diffing is bounded but synchronous and blocking. Inputs above 100,000 UTF-16 code units or 1,000
-  lines are rejected before jsdiff, and accepted worst-case input has a 500ms regression budget.
+  displayed lines are rejected before jsdiff; a terminal newline does not count as an extra empty
+  line. Accepted worst-case input has a 500ms regression budget.
   This is not cooperative yielding: the compare-view plan inherits a known limitation and must not
   call `toHunks` on the main thread for accepted-but-large input without an additional UI guard.
 - Binary conflicts are **listed with provenance** and can be moved to recovery, but not diffed.

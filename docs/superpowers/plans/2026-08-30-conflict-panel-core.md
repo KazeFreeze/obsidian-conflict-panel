@@ -736,6 +736,16 @@ describe("toHunks", () => {
 		// making a meaningful regression visible.
 		expect(performance.now() - started).toBeLessThan(500);
 	});
+
+	it("accepts exactly 1,000 newline-terminated lines", () => {
+		const input = Array.from({ length: 1000 }, (_, i) => `line-${i}`).join("\n") + "\n";
+		expect(toHunks(input, input).status).toBe("ok");
+	});
+
+	it("rejects 1,001 newline-terminated lines", () => {
+		const input = Array.from({ length: 1001 }, (_, i) => `line-${i}`).join("\n") + "\n";
+		expect(toHunks(input, input)).toEqual({ status: "too-large" });
+	});
 });
 ```
 
@@ -771,8 +781,9 @@ const lines = (value: string): string[] =>
 
 function inputTooLarge(value: string): boolean {
 	if (value.length > MAX_INPUT_CHARS) return true;
-	let lineCount = 1;
-	for (let i = 0; i < value.length; i++) {
+	// Match lines(): a trailing newline does not create a displayed empty line.
+	let lineCount = value.length === 0 ? 0 : 1;
+	for (let i = 0; i < value.length - 1; i++) {
 		if (value.charCodeAt(i) === 10 && ++lineCount > MAX_INPUT_LINES) return true;
 	}
 	return false;

@@ -22,8 +22,9 @@ const lines = (value: string): string[] =>
 
 function inputTooLarge(value: string): boolean {
 	if (value.length > MAX_INPUT_CHARS) return true;
-	let lineCount = 1;
-	for (let i = 0; i < value.length; i++) {
+	// Match lines(): a trailing newline does not create a displayed empty line.
+	let lineCount = value.length === 0 ? 0 : 1;
+	for (let i = 0; i < value.length - 1; i++) {
 		if (value.charCodeAt(i) === 10 && ++lineCount > MAX_INPUT_LINES) return true;
 	}
 	return false;
