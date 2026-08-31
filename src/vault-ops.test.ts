@@ -119,6 +119,18 @@ describe("VaultOps recovery path encoding", () => {
 		expect(recoveryPath.startsWith("Recovery/2/")).toBe(true);
 	});
 
+	it("accepts an archive basename of exactly 255 UTF-8 bytes", async () => {
+		const source = "x".repeat(243);
+		const vault = new FakeVault([[source, "boundary content"]]);
+
+		const target = await new VaultOps(vault.asApp(), "Recovery").moveToRecovery(file(source));
+		const archiveName = target.slice(target.lastIndexOf("/") + 1);
+
+		expect(new TextEncoder().encode(archiveName)).toHaveLength(255);
+		expect(vault.files.get(target)).toBe("boundary content");
+		expect(vault.files.has(source)).toBe(false);
+	});
+
 	it("skips a collision bucket occupied by a regular file", async () => {
 		const archiveName = "note.md.conflictbak";
 		const vault = new FakeVault([
@@ -146,6 +158,28 @@ describe("VaultOps recovery path encoding", () => {
 		).rejects.toBeInstanceOf(ArchiveNameTooLong);
 		expect(vault.rename).not.toHaveBeenCalled();
 		expect(vault.files.get(source)).toBe("content");
+	});
+
+	it("throws when collision buckets 2 through 999 are all unavailable", async () => {
+		const source = "note.md";
+		const archiveName = "note.md.conflictbak";
+		const vault = new FakeVault([
+			[source, "new losing version"],
+			[`Recovery/${archiveName}`, "archive 1"],
+		]);
+		vault.folders.add("Recovery");
+		for (let n = 2; n < 1000; n++) {
+			vault.folders.add(`Recovery/${n}`);
+			vault.files.set(`Recovery/${n}/${archiveName}`, `archive ${n}`);
+		}
+
+		await expect(
+			new VaultOps(vault.asApp(), "Recovery").moveToRecovery(file(source)),
+		).rejects.toBeInstanceOf(DestinationOccupied);
+		expect(vault.rename).not.toHaveBeenCalled();
+		expect(vault.files.get(source)).toBe("new losing version");
+		expect(vault.files.get(`Recovery/${archiveName}`)).toBe("archive 1");
+		expect(vault.files.get(`Recovery/999/${archiveName}`)).toBe("archive 999");
 	});
 });
 

@@ -1138,6 +1138,9 @@ copy both hold the restored content. A retry, a coincidentally identical occupie
 For every `moveAllToRecovery` result, assert the exact input `copy` object and its exact
 `recoveryPath` or exact thrown `error`, not only statuses and final vault state. After placing a new
 collision archive, re-assert the content of every older archive populated by the fixture.
+Test an archive basename of exactly 255 UTF-8 bytes so a `>= 255` regression fails. Populate the
+base archive and every collision bucket from 2 through 999, then assert exhaustion throws
+`DestinationOccupied`, never calls rename, and preserves the source plus existing archives.
 
 - [ ] **Step 5: Run the full suite**
 

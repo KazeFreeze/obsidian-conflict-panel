@@ -209,7 +209,7 @@ The encoding is percent-style: `%` becomes `%25` first, then `/` becomes `%2F`. 
 character first is what makes it unambiguous — a naive `/` → `__` flattening collides, since
 `a__b/note.md` and `a/b__note.md` produce the same string. Restore decodes in reverse. The encoded
 archive basename is measured with `TextEncoder` and rejected with a dedicated error above 255 UTF-8
-bytes, before any adapter rename is attempted.
+bytes, before any adapter rename is attempted; exactly 255 bytes is accepted.
 
 The first archive uses `Conflict Recovery/<encoded>.conflictbak`. Collisions keep that basename
 unchanged and move the counter into a subfolder: `Conflict Recovery/2/<encoded>.conflictbak`, then
@@ -219,6 +219,8 @@ only the final basename, so collision 10 cannot alias collision 1 and literal `%
 source path round-trip unchanged. Every existing path component is checked with `adapter.stat()`:
 a regular file named `2` is not mistaken for a collision folder, so that bucket is skipped, and a
 regular file blocking any configured parent makes folder creation fail without moving the copy.
+Collision search is deliberately finite: if the base and buckets 2 through 999 are unavailable, it
+throws `DestinationOccupied` without renaming or overwriting anything.
 
 Parent folders are created explicitly; neither `vault.create` nor `vault.rename` creates them.
 
