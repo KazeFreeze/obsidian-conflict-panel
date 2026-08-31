@@ -181,6 +181,12 @@ describe("VaultOps recovery path encoding", () => {
 		expect(vault.files.get(`Recovery/${archiveName}`)).toBe("archive 1");
 		expect(vault.files.get(`Recovery/999/${archiveName}`)).toBe("archive 999");
 	});
+
+	it("uses bucket 999 when every earlier collision destination is occupied", async () => {
+		const target = await archiveAtCollision("note.md", 999);
+
+		expect(target).toBe("Recovery/999/note.md.conflictbak");
+	});
 });
 
 describe("VaultOps restore", () => {
