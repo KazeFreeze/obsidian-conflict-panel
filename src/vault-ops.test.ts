@@ -122,6 +122,15 @@ describe("createNew", () => {
 		expect(vault.files.get("note.md")).toBe("new content");
 	});
 
+	it("preserves leading and trailing whitespace including the terminal newline", async () => {
+		const vault = new FakeVault();
+		const content = "  first line\nlast line  \n";
+
+		await new VaultOps(vault.asApp(), "Recovery").createNew("note.md", content);
+
+		expect(vault.files.get("note.md")).toBe(content);
+	});
+
 	it("throws DestinationOccupied when a file already holds the path", async () => {
 		const vault = new FakeVault([["note.md", "existing"]]);
 

@@ -116,7 +116,7 @@ const { MockTFile, MockTFolder } = vi.hoisted(() => ({
 }));
 vi.mock("obsidian", () => ({ TFile: MockTFile, TFolder: MockTFolder }));
 
-import { buildVaultIndex } from "./scan";
+import { buildVaultIndex, scanConflicts } from "./scan";
 
 describe("buildVaultIndex", () => {
 	it("separates files from folders", () => {
@@ -133,6 +133,19 @@ describe("buildVaultIndex", () => {
 		const index = buildVaultIndex({ getAllLoadedFiles: () => [] } as never);
 		expect(index.files.size).toBe(0);
 		expect(index.folders.size).toBe(0);
+	});
+});
+
+describe("scanConflicts", () => {
+	it("returns groups found in the loaded vault entries", () => {
+		const copy = "note.sync-conflict-20260830-143000-AAA.md";
+		const vault = {
+			getAllLoadedFiles: () => [new MockTFile("note.md"), new MockTFile(copy)],
+		};
+		const groups = scanConflicts(vault as never, "Conflict Recovery");
+		expect(groups).toHaveLength(1);
+		expect(groups[0]?.originalPath).toBe("note.md");
+		expect(groups[0]?.copies.map((entry) => entry.path)).toEqual([copy]);
 	});
 });
 ```
@@ -175,7 +188,7 @@ export function scanConflicts(vault: Vault, recoveryFolder: string): ConflictGro
 - [ ] **Step 4: Run the tests and confirm they pass**
 
 Run: `npm test -- scan`
-Expected: PASS, 2 tests.
+Expected: PASS, 3 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -273,10 +286,20 @@ it("reports which of a group's files are open", () => {
 	expect(blockingPaths(group as never, new Set(["note.md"]))).toEqual(["note.md"]);
 	expect(blockingPaths(group as never, new Set())).toEqual([]);
 });
+
+it("blocks when only a conflict copy is open", () => {
+	const copyPath = "note.sync-conflict-20260830-143000-AAA.md";
+	const group = {
+		originalPath: "note.md",
+		shape: "normal" as const,
+		copies: [{ path: copyPath } as never],
+	};
+	expect(blockingPaths(group as never, new Set([copyPath]))).toEqual([copyPath]);
+});
 ```
 
 Run: `npm test -- editor-guard`
-Expected: PASS, 4 tests.
+Expected: PASS, 5 tests.
 
 ```bash
 git add src/editor-guard.ts src/editor-guard.test.ts
@@ -397,7 +420,7 @@ import { describe, expect, it } from "vitest";
 import { isSafeVaultPath } from "./safe-path";
 
 describe("isSafeVaultPath", () => {
-	it.each(["note.md", "a/b/note.md", "Folder Name/note with spaces.md"])(
+	it.each(["note.md", "a/b/note.md", "Folder Name/note with spaces.md", "50%25 done.md"])(
 		"accepts the ordinary vault path %j",
 		(path) => expect(isSafeVaultPath(path)).toBe(true),
 	);
@@ -459,6 +482,12 @@ Add to `src/vault-ops.test.ts`:
 ```ts
 describe("createNew", () => {
 	it("writes the content at an empty path", async () => { /* assert exact content */ });
+
+	it("preserves surrounding whitespace and the terminal newline", async () => {
+		const content = "  first line\nlast line  \n";
+		await ops.createNew("note.md", content);
+		expect(vault.files.get("note.md")).toBe(content);
+	});
 
 	it("throws DestinationOccupied when a file already holds the path", async () => {
 		await expect(ops.createNew("note.md", "x")).rejects.toBeInstanceOf(DestinationOccupied);

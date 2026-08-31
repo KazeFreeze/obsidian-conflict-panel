@@ -18,6 +18,17 @@ describe("blockingPaths", () => {
 		expect(blockingPaths(group as never, new Set(["note.md"]))).toEqual(["note.md"]);
 		expect(blockingPaths(group as never, new Set())).toEqual([]);
 	});
+
+	it("blocks when only a conflict copy is open", () => {
+		const copyPath = "note.sync-conflict-20260830-143000-AAA.md";
+		const group = {
+			originalPath: "note.md",
+			shape: "normal" as const,
+			copies: [{ path: copyPath } as never],
+		};
+
+		expect(blockingPaths(group as never, new Set([copyPath]))).toEqual([copyPath]);
+	});
 });
 
 describe("openPathsIn", () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { isSafeVaultPath } from "./safe-path";
 
 describe("isSafeVaultPath", () => {
-	it.each(["note.md", "a/b/note.md", "Folder Name/note with spaces.md"])(
+	it.each(["note.md", "a/b/note.md", "Folder Name/note with spaces.md", "50%25 done.md"])(
 		"accepts the ordinary vault path %j",
 		(path) => expect(isSafeVaultPath(path)).toBe(true),
 	);
