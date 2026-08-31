@@ -1,6 +1,6 @@
 import type { App, TFile } from "obsidian";
 import { describe, expect, it, vi } from "vitest";
-import { DestinationOccupied, StaleInput, VaultOps } from "./vault-ops";
+import { StaleInput, VaultOps } from "./vault-ops";
 
 const file = (path: string): TFile => ({ path }) as TFile;
 
@@ -46,35 +46,45 @@ describe("VaultOps recovery path encoding", () => {
 });
 
 describe("VaultOps restore", () => {
-	it("aborts when the destination is already occupied", async () => {
+	it("creates the original with the copy content before archiving the copy", async () => {
+		const copy = file("copy.md");
+		const read = vi.fn(async () => "copy contents");
+		const create = vi.fn(async (path: string) => file(path));
 		const rename = vi.fn(async () => undefined);
 		const app = {
 			vault: {
-				adapter: { exists: vi.fn(async () => true) },
+				adapter: {
+					exists: vi.fn(async (path: string) => path === "Recovery"),
+					mkdir: vi.fn(async () => undefined),
+				},
+				read,
+				create,
+				rename,
+			},
+		} as unknown as App;
+
+		await new VaultOps(app, "Recovery").restoreTo(copy, "original.md");
+
+		expect(read).toHaveBeenCalledWith(copy);
+		expect(create).toHaveBeenCalledWith("original.md", "copy contents");
+		expect(rename).toHaveBeenCalledWith(copy, "Recovery/copy.md.conflictbak");
+	});
+
+	it("does not archive the copy when no-clobber creation fails", async () => {
+		const occupied = new Error("already exists");
+		const create = vi.fn(async () => Promise.reject(occupied));
+		const rename = vi.fn(async () => undefined);
+		const app = {
+			vault: {
+				read: vi.fn(async () => "copy contents"),
+				create,
 				rename,
 			},
 		} as unknown as App;
 
 		await expect(
 			new VaultOps(app, "Recovery").restoreTo(file("copy.md"), "original.md"),
-		).rejects.toBeInstanceOf(DestinationOccupied);
-		expect(rename).not.toHaveBeenCalled();
-	});
-
-	it("re-checks the destination immediately before rename", async () => {
-		const exists = vi
-			.fn<(path: string) => Promise<boolean>>()
-			.mockResolvedValueOnce(false)
-			.mockResolvedValueOnce(true);
-		const rename = vi.fn(async () => undefined);
-		const app = {
-			vault: { adapter: { exists }, rename },
-		} as unknown as App;
-
-		await expect(
-			new VaultOps(app, "Recovery").restoreTo(file("copy.md"), "original.md"),
-		).rejects.toBeInstanceOf(DestinationOccupied);
-		expect(exists).toHaveBeenCalledTimes(2);
+		).rejects.toBe(occupied);
 		expect(rename).not.toHaveBeenCalled();
 	});
 });

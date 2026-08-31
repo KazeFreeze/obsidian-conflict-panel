@@ -69,7 +69,7 @@ Authoritative. Earlier revisions contradicted themselves by describing actions i
 
 | action | result |
 |---|---|
-| Restore copy *X* to the original path | `vault.rename` *X* onto the original path. **Warned explicitly:** this resurrects a file another device deliberately deleted, and Syncthing propagates that resurrection everywhere. Remaining copies move to recovery. |
+| Restore copy *X* to the original path | Read *X*, atomically create the original with `vault.create`, then move *X* to recovery. **Warned explicitly:** this resurrects a file another device deliberately deleted, and Syncthing propagates that resurrection everywhere. Remaining copies move to recovery. |
 | Accept the deletion | all copies moved to recovery |
 | Do nothing | untouched |
 
@@ -117,17 +117,15 @@ for (const copy of group.copies) {
 }
 ```
 
-**No-clobber is mandatory, because `Vault.rename` promises nothing about it.** Its contract documents
-neither "throws if the destination exists" nor replace semantics, so the plugin must never issue a
-rename to a path it has not just found free. `freePathNear` appends `-2`, `-3` and so on until
-`getAbstractFileByPath` returns null.
+**No-clobber is mandatory for restoration.** `Vault.create(path, data)` is the public atomic
+no-clobber primitive: it throws if the original path is occupied. Restore therefore reads the copy,
+creates the original, and only then archives the copy. A create failure changes nothing; an archive
+failure after create leaves a duplicate.
 
-That narrows the race without closing it, which is acceptable in the recovery folder: a collision
-there costs a duplicate artifact, not data. Orphan restoration is stricter: it checks once when the
-operation starts and again immediately before `vault.rename`; if either check finds the original,
-it aborts and re-presents the group. The public API cannot make that check and rename atomic. If the
-original reappears after the final check, the rename may still overwrite a note nobody reviewed.
-This residual race is narrowed as far as the API permits, not claimed to be closed.
+Recovery archival still uses a checked `vault.rename`, whose contract does not promise no-clobber.
+The Adapter check sees unloaded artifacts and narrows the window, but cannot close it. A concurrent
+archive can occupy the checked destination before rename, and the rename may overwrite that
+**previously archived losing version**. That is real data loss even though the current copy survives.
 
 **Exact string equality, not SHA-256.** The reviewed text is already retained for the diff.
 
@@ -176,12 +174,10 @@ The rest of the plugin stays Vault-managed. The Adapter is scoped to exactly one
 also what makes the no-clobber check trustworthy: `adapter.exists()` sees an unloaded
 `.conflictbak` that `getAbstractFileByPath()` would miss and report as free.
 
-**Restore is a move, not a copy.** The archive name encodes the source path and the original
-extension, so restore reconstructs `<original path>.<original ext>` and renames the artifact back.
-If either destination check observes an occupied path, restore **aborts and says so**. A writer can
-still appear after the final check; the failure table records that residual race. Restoring a binary
-artifact restores its real extension; there is no "restore as `.md`", which rev 7 wrongly implied
-would work for every artifact.
+**Restore creates, then archives.** For Markdown orphans, it reads the conflict copy, calls
+`vault.create` at the original path, and only after that succeeds moves the copy to recovery. If the
+path is occupied, create aborts atomically. If archival then fails, both copies remain. Opaque groups
+do not offer restore in v0.1.
 
 **Index staleness is accepted, not solved.** Renaming `.md` to an unsupported extension does not
 reliably evict the old entry: Dataview's rename handler returns early when the new path is not
@@ -245,9 +241,11 @@ file* stays inside the excluded folder and is excluded too. Regression test requ
 | external write between adapter read and `process` write | **can be overwritten** |
 | write rejects, or app dies mid-write | **original may be truncated** |
 | `process` succeeds, then app dies | resolved original, copies unmoved — benign, rediscovered |
+| restore create finds an occupied original | clean abort, copy untouched |
+| restore create succeeds, then archive fails | original and copy both remain — duplicate, no loss |
 | a copy changes between review and move | the *current* content is moved, not the reviewed content |
 | `rename` throws on one copy | that copy stays, others still processed |
-| original reappears after restore's final check | **can be overwritten**; public API has no atomic no-clobber rename |
+| recovery destination appears after its check | **previously archived losing version can be overwritten** |
 | later editor autosave lands | **can overwrite the result** |
 
 Three are genuinely harmful and all three are writes, not deletes. They are narrowed, not
@@ -288,9 +286,8 @@ diff), `vault-ops.ts` (the only module permitted to write, move or create), `not
 3. **Input-version precondition.** The only content replacement checks equality against the reviewed
    text, inside `process`.
 4. **Cleanup preserves.** Copies are moved, never copied-then-removed.
-5. **Check every rename destination immediately before the move.** In the recovery folder a
-   collision yields a suffixed name; on a real note path either observed collision aborts. The
-   check-to-rename race cannot be closed with the public API.
+5. **Restoration is atomic no-clobber.** `vault.create` fails if the original is occupied. Recovery
+   rename destinations are checked, but their check-to-rename race remains and is documented.
 6. **Refuse while any group file is open in an editor.**
 7. **Resurrection is warned.** Restoring an orphan copy to its original path states plainly that it
    propagates to every device.

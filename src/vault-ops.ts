@@ -46,7 +46,9 @@ export class VaultOps {
 	 * Move a conflict copy into the recovery folder.
 	 *
 	 * A MOVE, never copy-then-delete. Whatever the file holds at rename time is
-	 * what survives, so a racing writer cannot cause loss.
+	 * what survives. The checked destination narrows but cannot close a race: a
+	 * concurrent archive can make rename overwrite a previously archived losing
+	 * version. That older archive is real data and can be lost.
 	 */
 	async moveToRecovery(copy: TFile): Promise<string> {
 		await this.ensureFolder(this.recoveryFolder);
@@ -69,25 +71,13 @@ export class VaultOps {
 		return results;
 	}
 
-	/**
-	 * Restore an orphan copy onto its original path when both checks find it free.
-	 *
-	 * The public API has no atomic no-clobber rename. The second check narrows the
-	 * window as far as possible, but a writer can still appear after it and before
-	 * rename. Callers must not claim this residual race is closed.
-	 */
+	/** Restore without clobber: create first, then archive the still-existing copy. */
 	async restoreTo(copy: TFile, originalPath: string): Promise<void> {
-		if (await this.app.vault.adapter.exists(originalPath)) {
-			// The original came back while the user was deciding. That turns an
-			// orphan into an ordinary conflict; renaming over it would destroy a
-			// note nobody reviewed.
-			throw new DestinationOccupied(originalPath);
-		}
-		// Re-check immediately before rename. Nothing fallible belongs between these.
-		if (await this.app.vault.adapter.exists(originalPath)) {
-			throw new DestinationOccupied(originalPath);
-		}
-		await this.app.vault.rename(copy, originalPath);
+		const content = await this.app.vault.read(copy);
+		// Vault.create throws if occupied. Only archive after atomic no-clobber
+		// creation succeeds, so every later failure leaves a duplicate, not loss.
+		await this.app.vault.create(originalPath, content);
+		await this.moveToRecovery(copy);
 	}
 
 	/**
@@ -124,8 +114,8 @@ export class VaultOps {
 	 * Uses the ADAPTER, not `getAbstractFileByPath`. Unsupported extensions may not
 	 * be loaded into Obsidian's vault tree, so the Vault API would report an
 	 * existing `.conflictbak` as absent and we would rename over it.
-	 * The exists-to-rename race remains here too; it is accepted for recovery
-	 * because a collision can duplicate an artifact but cannot destroy the source.
+	 * The exists-to-rename race remains. A concurrent archive can occupy the checked
+	 * path and be overwritten, losing that previously archived losing version.
 	 */
 	private async freePath(base: string): Promise<string> {
 		if (!(await this.app.vault.adapter.exists(base))) return base;
