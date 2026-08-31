@@ -98,6 +98,20 @@ async function archiveAtCollision(sourcePath: string, collisionNumber: number): 
 	return target;
 }
 
+describe("VaultOps error types", () => {
+	it("keeps restore archival failure distinct from destination occupancy", () => {
+		const occupied = new DestinationOccupied("original.md");
+		const archival = new RestoreArchiveFailed(
+			"original.md",
+			"copy.md",
+			new Error("archive unavailable"),
+		);
+
+		expect(archival).not.toBeInstanceOf(DestinationOccupied);
+		expect(occupied).not.toBeInstanceOf(RestoreArchiveFailed);
+	});
+});
+
 describe("VaultOps recovery path encoding", () => {
 	it.each([
 		{ source: "a/b/note.md", collision: 1 },
