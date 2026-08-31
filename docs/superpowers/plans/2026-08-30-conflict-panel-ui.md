@@ -311,6 +311,10 @@ describe("needsConfirmation", () => {
 		expect(needsConfirmation("x\n".repeat(251), "y")).toBe(true);
 	});
 
+	it("asks for 251 lines without a terminating newline", () => {
+		expect(needsConfirmation(Array.from({ length: 251 }, () => "x").join("\n"), "y")).toBe(true);
+	});
+
 	it("asks when only the right side is large", () => {
 		expect(needsConfirmation("y", "x".repeat(25_001))).toBe(true);
 	});
@@ -329,7 +333,7 @@ Expected: FAIL, `needsConfirmation is not a function`.
 - [ ] **Step 3: Implement it**
 
 ```ts
-// A fifth of the hard limit. Below this the diff is cheap enough to run
+// A quarter of the hard limit. Below this the diff is cheap enough to run
 // unannounced; above it the 500ms freeze is noticeable, so the user asks for it
 // and can attribute the pause. toHunks still rejects anything past MAX_INPUT_*.
 const SOFT_INPUT_CHARS = 25_000;
@@ -337,8 +341,9 @@ const SOFT_INPUT_LINES = 250;
 
 const pastSoftBand = (value: string): boolean => {
 	if (value.length > SOFT_INPUT_CHARS) return true;
-	let lineCount = 0;
-	for (let i = 0; i < value.length; i++) {
+	// Match toHunks: a trailing newline does not create a displayed empty line.
+	let lineCount = value.length === 0 ? 0 : 1;
+	for (let i = 0; i < value.length - 1; i++) {
 		if (value.charCodeAt(i) === 10 && ++lineCount > SOFT_INPUT_LINES) return true;
 	}
 	return false;

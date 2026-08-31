@@ -17,8 +17,29 @@ const DEFAULT_MAX_HUNKS = 500;
 const MAX_INPUT_CHARS = 100_000;
 const MAX_INPUT_LINES = 1_000;
 
+// A quarter of the hard limit. Below this the diff is cheap enough to run
+// unannounced; above it the freeze is noticeable, so the user asks for it and
+// can attribute the pause. toHunks still rejects anything past MAX_INPUT_*.
+const SOFT_INPUT_CHARS = 25_000;
+const SOFT_INPUT_LINES = 250;
+
 const lines = (value: string): string[] =>
 	value.split("\n").filter((l, i, a) => !(i === a.length - 1 && l === ""));
+
+const pastSoftBand = (value: string): boolean => {
+	if (value.length > SOFT_INPUT_CHARS) return true;
+	// Match toHunks: a trailing newline does not create a displayed empty line.
+	let lineCount = value.length === 0 ? 0 : 1;
+	for (let i = 0; i < value.length - 1; i++) {
+		if (value.charCodeAt(i) === 10 && ++lineCount > SOFT_INPUT_LINES) return true;
+	}
+	return false;
+};
+
+/** Should the view make the user press a button before synchronous diffing? */
+export function needsConfirmation(left: string, right: string): boolean {
+	return pastSoftBand(left) || pastSoftBand(right);
+}
 
 function inputTooLarge(value: string): boolean {
 	if (value.length > MAX_INPUT_CHARS) return true;

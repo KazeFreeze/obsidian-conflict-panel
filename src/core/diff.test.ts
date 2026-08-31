@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toHunks } from "./diff";
+import { needsConfirmation, toHunks } from "./diff";
 
 describe("toHunks", () => {
 	it("returns no hunks for identical text", () => {
@@ -58,5 +58,33 @@ describe("toHunks", () => {
 		const input = Array.from({ length: 1001 }, (_, i) => `line-${i}`).join("\n") + "\n";
 
 		expect(toHunks(input, input)).toEqual({ status: "too-large" });
+	});
+});
+
+describe("needsConfirmation", () => {
+	it("lets small input compare without asking", () => {
+		expect(needsConfirmation("a\nb", "a\nc")).toBe(false);
+	});
+
+	it("asks before comparing input past the soft character band", () => {
+		expect(needsConfirmation("x".repeat(25_001), "y")).toBe(true);
+	});
+
+	it("asks before comparing newline-terminated input past the soft line band", () => {
+		expect(needsConfirmation("x\n".repeat(251), "y")).toBe(true);
+	});
+
+	it("asks before comparing non-terminated input past the soft line band", () => {
+		expect(needsConfirmation(Array.from({ length: 251 }, () => "x").join("\n"), "y")).toBe(
+			true,
+		);
+	});
+
+	it("asks when only the right side is large", () => {
+		expect(needsConfirmation("y", "x".repeat(25_001))).toBe(true);
+	});
+
+	it("does not ask exactly at the band", () => {
+		expect(needsConfirmation("x".repeat(25_000), "y")).toBe(false);
 	});
 });
