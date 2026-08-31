@@ -961,7 +961,7 @@ export class RestoreArchiveFailed extends Error {
 		readonly cause: unknown,
 	) {
 		super(
-			`Restored ${originalPath} successfully. The conflict copy ${copyPath} could not be moved to recovery, so both files are still present and nothing was lost. Move or delete the copy yourself when convenient.`,
+			`Restored ${originalPath} successfully. The conflict copy ${copyPath} could not be moved to recovery, so the restored file and conflict copy are both present. Move or delete the copy yourself when convenient.`,
 		);
 	}
 }
@@ -1030,8 +1030,8 @@ export class VaultOps {
 		const content = await this.app.vault.read(copy);
 		// This lookup only recognizes a destination already occupied. It
 		// NEVER authorizes the write and is not the old check-then-act scheme:
-		// create() remains the sole no-clobber safety guard. If the path is empty
-		// now but occupied before create runs, create throws and nothing is clobbered.
+		// create() repeats an existence check, but its later adapter.write can race an
+		// external writer. It is the best public guard available, not an atomic one.
 		const existing = this.app.vault.getAbstractFileByPath(originalPath);
 		if (existing instanceof TFile) throw new DestinationOccupied(originalPath);
 		if (existing) throw new DestinationOccupied(originalPath);
@@ -1132,7 +1132,7 @@ and where a configured recovery parent is a regular file (the copy must remain u
 For restore, assert that a known file or folder produces `DestinationOccupied`, while an ambiguous
 `vault.create` rejection is returned as the exact raw cause and leaves both paths unchanged.
 Force archival to fail after create and assert `RestoreArchiveFailed` carries both paths and the raw
-cause while its message says restoration succeeded and nothing was lost. Assert the original and
+cause while its message says restoration succeeded and both files remain. Assert the original and
 copy both hold the restored content. A retry, a coincidentally identical occupied destination, and
 `restoreTo(copy, copy.path)` must all throw `DestinationOccupied` without moving the copy.
 For every `moveAllToRecovery` result, assert the exact input `copy` object and its exact
@@ -1156,17 +1156,17 @@ Expected: exit 0.
 
 ```bash
 git add src/vault-ops.ts src/boundaries.test.ts
-git commit -m "feat: vault operations with no-clobber moves and no deletion"
+git commit -m "feat: vault operations with checked recovery moves and no deletion"
 ```
 
 ---
 
 ## Self-Review
 
-**Spec coverage.** Detection, grouping with all four shapes and precedence, action derivation, bounded diffing, the atomic content replacement with its precondition, and no-clobber moves via the Adapter each have a task. Boundary spelling guards supplement review without claiming to prove the writer and no-deletion invariants. The recovery Adapter decision is implemented in `freePath` and `ensureFolder`.
+**Spec coverage.** Detection, grouping with all four shapes and precedence, action derivation, bounded diffing, the atomic content replacement with its precondition, and checked recovery moves via the Adapter each have a task. Boundary spelling guards supplement review without claiming to prove the writer and no-deletion invariants. The recovery Adapter decision is implemented in `freePath` and `ensureFolder`.
 
 **Not covered by this plan, deliberately:** `panel-view.ts`, `compare-view.ts`, the Recovery list UI, and wiring in `main.ts`. Those are UI and are the subject of a second plan, written once the core above is green. Tasks 1-6 produce a plugin that loads, has real identity, and carries a fully tested decision core.
 
-**Known gap to carry into the UI plan:** the editor guard (`workspace.iterateAllLeaves()`) is a shell concern and appears in neither this plan nor `vault-ops.ts`. It must gate every call into `VaultOps` from the views.
+**Known gap to carry into the UI plan:** the editor narrowing (`workspace.iterateAllLeaves()`) is a shell concern and appears in neither this plan nor `vault-ops.ts`. It gates conflict-resolution actions, while Recovery may call `createNew` directly because that operation requires an empty path and cannot overwrite an open file.
 
 **Type consistency.** `ParsedConflict`, `ParsedConflictFile`, `ConflictGroup`, `ConflictShape` and `EntryAction` are defined once in `core/types.ts` or `core/entry-view.ts` and used consistently. `groupConflicts` takes `VaultIndex`, which the shell builds from `vault.getFiles()` and `vault.getAllLoadedFiles()`.

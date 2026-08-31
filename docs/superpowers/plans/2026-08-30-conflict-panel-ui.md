@@ -51,25 +51,28 @@ and the first draft of this plan broke both.
    a soft band below which the diff computes on its own, and above which the user presses a
    button, so the one blocking call is deliberate and attributable.
 
-**The editor guard is this phase's job.** The core has no idea whether a file is open.
-Nothing may call `VaultOps` while any file in the group is open in an editor, because a
-pending editor autosave can overwrite the result. That guard does not exist yet.
+**The editor narrowing is this phase's job.** The core has no idea whether a file is visible
+as open through workspace leaves. Conflict actions check every group path because a pending
+editor autosave can overwrite the result. Embedded Canvas cards and changes during awaits
+remain outside what the public API can guard.
 
 **Only `src/vault-ops.ts` may mutate the vault.** `src/boundaries.test.ts` greps every source
 file for `vault.process|rename|create|modify` and fails on a match outside that one file. A
 view that calls `vault.create` directly turns the suite red. Every write this phase needs goes
 through `VaultOps`, which is why Task 4 exists.
 
-**No check-then-act anywhere.** `create` throwing on an occupied path is the sole no-clobber
-guard. An `exists()` lookup may only *reject*; it may never authorise a write. This was removed
-from core restore across three review rounds and must not come back in a view.
+**Do not add an authorising check-then-act.** An `exists()` lookup may only reject; it may
+never authorise a write. Obsidian's own `create` performs `adapter.exists` and then an
+overwrite-capable `adapter.write`, so it is only the best available narrow-window guard. No
+plugin API can lock Syncthing out between those calls.
 
 **A recovery artifact's decoded path is untrusted input.** `sourcePathFromRecovery` turns
 `%2F` back into `/`, so an artifact named `..%2Foutside.md.conflictbak` — a perfectly ordinary
 filename that Syncthing will happily deliver — decodes to `../outside.md`. Round four
-established that `..` escapes the vault through adapter-backed paths. Every decoded path is
-validated before it reaches a write, and an artifact that fails is listed without a restore
-button rather than silently rewritten.
+established that `..` traverses through adapter-backed paths. Every decoded path is validated
+lexically before it reaches a write, and an artifact that fails is listed without a restore
+button rather than silently rewritten. This rejects encoded traversal; it does not confine a
+path that traverses an on-disk symlink.
 
 **The recovery folder can change while a view is open.** `saveSettings()` can move it at any
 time, so a `VaultOps` captured once in `onload` goes stale and would archive into the old
@@ -472,7 +475,7 @@ Expected: PASS, 10 cases.
 
 ```bash
 git add src/core/safe-path.ts src/core/safe-path.test.ts
-git commit -m "feat: reject a decoded artifact path that would escape the vault"
+git commit -m "feat: validate decoded artifact paths lexically"
 ```
 
 - [ ] **Step 6: Write the failing tests for `createNew`**
@@ -525,7 +528,7 @@ import { isSafeVaultPath } from "./core/safe-path";
 ```ts
 export class UnsafePath extends Error {
 	constructor(readonly path: string) {
-		super(`${path} is not a path inside this vault. Nothing was written.`);
+		super(`${path} is not a canonical vault-relative path. Nothing was written.`);
 	}
 }
 ```
@@ -534,9 +537,9 @@ export class UnsafePath extends Error {
 	/**
 	 * Create a file at a path that must be empty.
 	 *
-	 * The lookup only RECOGNISES an occupied path. It never authorises the write:
-	 * `create` remains the sole no-clobber guard, exactly as in `restoreTo`. Do not
-	 * turn this into a check-then-act by acting on what the lookup returns.
+	 * The lookup only RECOGNISES an occupied path; it never authorises the write.
+	 * Obsidian's create repeats an existence check before adapter.write, making it
+	 * the best available narrow-window guard rather than an atomic primitive.
 	 *
 	 * The safety check comes FIRST, before any vault call, because one caller passes
 	 * a path decoded from a filename on disk.
@@ -725,7 +728,8 @@ git commit -m "feat: sidebar panel listing conflict groups with a count"
 
 ### Task 6: `src/compare-view.ts`
 
-The only surface that calls `VaultOps`. Every action goes through the editor guard first.
+The conflict-resolution surface that calls `VaultOps`. Every action here goes through the
+editor narrowing first; Recovery separately calls `createNew` for an empty destination.
 **No vault mutation call appears in this file** — reads and lookups use `vault.*`, while
 `boundaries.test.ts` enforces that every mutation goes through `VaultOps`.
 
@@ -1161,12 +1165,11 @@ instantiated outside Obsidian.
 Reads archived artifacts through `DataAdapter`, because unsupported extensions may not be in
 the vault tree and `getAbstractFileByPath` would report them absent.
 
-**Restore here copies; it does not move.** The first draft used `adapter.exists` followed by
-`adapter.rename`, which is check-then-act — the pattern removed from core restore over three
-review rounds — and `rename` has no documented no-clobber guarantee. Instead the artifact is
-read and written through `VaultOps.createNew`, and **the artifact stays where it is.** Nothing
-in recovery is ever removed by this plugin, which the view already tells the user. That
-deletes the race rather than guarding it.
+**Restore here copies; it does not move.** Obsidian's `adapter.rename` and `vault.create` both
+check existence before an overwrite-capable operation, so neither is atomic against an
+external writer. The artifact is read and written through `VaultOps.createNew`, and **the
+artifact stays where it is.** Leaving that archive in place is safer and matches the view's
+promise that recovery artifacts are never removed automatically.
 
 **Files:**
 - Create: `src/recovery-view.ts`
@@ -1185,7 +1188,7 @@ interface Artifact {
 	path: string;
 	sourcePath: string;
 	bytes: number;
-	/** False when the decoded path would escape the vault. See isSafeVaultPath. */
+	/** False when the decoded path contains traversal or is not canonical. */
 	safe: boolean;
 }
 
@@ -1262,7 +1265,7 @@ export class ConflictRecoveryView extends ItemView {
 				// No button at all. An unsafe path gets an explanation, never a control
 				// that would have to refuse when pressed.
 				item.createDiv({
-					text: `This archive names a path outside the vault, so it cannot be copied back here. The file itself is intact at ${artifact.path}.`,
+					text: `This archive does not name a canonical vault-relative path, so it cannot be copied back. The file itself is intact at ${artifact.path}.`,
 					cls: "conflict-compare__warning",
 				});
 				continue;
@@ -1284,9 +1287,11 @@ export class ConflictRecoveryView extends ItemView {
 
 	private async restore(artifact: Artifact): Promise<void> {
 		try {
+			// No editor guard is needed: createNew requires an empty destination, so
+			// there is no existing file at that path for an editor to have open.
 			const content = await this.app.vault.adapter.read(artifact.path);
-			// createNew is the only write path a view gets, and `create` inside it is
-			// the sole no-clobber guard. No exists()-then-write here.
+			// createNew is the only write path this view gets. Its create call has the
+			// best narrow-window occupied-path guard exposed by the public API.
 			await this.ops().createNew(artifact.sourcePath, content);
 			new Notice(`Copied back to ${artifact.sourcePath}. The archive is still in recovery.`);
 			await this.render();
@@ -1351,9 +1356,10 @@ leaves the archive in place.
 ## Self-Review
 
 **Spec coverage.** The sidebar list with a count, the main-tab diff, the authoritative action
-matrix, the editor guard, the Recovery list, 48dp targets, visible text labels, device-ID
-labelling, and save-as-new stating that it resolves nothing all have a task. Every `VaultOps`
-entry point is reached through exactly one guarded method, `run()`.
+matrix, the editor narrowing, the Recovery list, 48dp targets, visible text labels, device-ID
+labelling, and save-as-new stating that it resolves nothing all have a task. Compare actions
+reach `VaultOps` through `run()`; Recovery calls `createNew` directly because its destination
+must be empty and therefore cannot already be open in an editor.
 
 **Four corrections after the worker rejected the first draft.** All four were real:
 
@@ -1364,17 +1370,17 @@ entry point is reached through exactly one guarded method, `run()`.
 | `vault.create` in two views, which `boundaries.test.ts` fails | Task 4 `VaultOps.createNew` |
 | `keep-copy` and `restore-copy` archived only the selected copy | both archive every copy, per the spec matrix |
 
-A fifth followed from the third: recovery restore was `adapter.exists` then `adapter.rename`,
-check-then-act with no no-clobber guarantee. Restore now copies and leaves the archive alone,
-which removes the race instead of guarding it.
+A fifth followed from the third: recovery restore moved the archive away. Restore now copies
+and leaves the archive alone, which is safer even though both create and rename retain narrow
+external-writer race windows.
 
 **Three more after the second rejection.** Also all real:
 
 | defect in the second draft | fix |
 |---|---|
 | `VaultOps` captured once, stale after `saveSettings` moves the recovery folder | views take `() => VaultOps`; `main.ts` rebuilds it and rescans on save |
-| overlapping `loadSelection` reads could pair copy B's selection with copy A's text | a `loadToken` generation guard; no field is assigned until the read proves current |
-| a decoded artifact path is a filename on disk and can be `../outside.md` | `isSafeVaultPath` rejects it, `createNew` throws `UnsafePath` before any vault call, and the row is listed with no restore button |
+| overlapping `loadSelection` reads and the interval before a new read lands could pair copy B's selection with copy A's text | a `loadToken` rejects late reads; synchronous nulling plus disabled actions makes the in-flight selection non-actionable |
+| a decoded artifact path is a filename on disk and can contain `../outside.md` | `isSafeVaultPath` lexically rejects traversal, `createNew` throws `UnsafePath` before any vault call, and the row is listed with no restore button; symlink confinement is not claimed |
 
 The third is the serious one. `..%2Foutside.md.conflictbak` is an ordinary filename that
 Syncthing will deliver, and `sourcePathFromRecovery` decodes it straight to `../outside.md`.

@@ -25,7 +25,7 @@ export class ArchiveNameTooLong extends Error {
 /** Thrown before any vault access when a write target is not vault-relative. */
 export class UnsafePath extends Error {
 	constructor(readonly path: string) {
-		super(`${path} is not a path inside this vault. Nothing was written.`);
+		super(`${path} is not a canonical vault-relative path. Nothing was written.`);
 	}
 }
 
@@ -37,7 +37,7 @@ export class RestoreArchiveFailed extends Error {
 		readonly cause: unknown,
 	) {
 		super(
-			`Restored ${originalPath} successfully. The conflict copy ${copyPath} could not be moved to recovery, so both files are still present and nothing was lost. Move or delete the copy yourself when convenient.`,
+			`Restored ${originalPath} successfully. The conflict copy ${copyPath} could not be moved to recovery, so the restored file and conflict copy are both present. Move or delete the copy yourself when convenient.`,
 		);
 	}
 }
@@ -73,8 +73,9 @@ export class VaultOps {
 	/**
 	 * Create a file at a safe path that must be empty.
 	 *
-	 * The lookup only recognises occupancy; create remains the sole no-clobber
-	 * guard if the path becomes occupied after that lookup.
+	 * The lookup rejects known occupancy. Obsidian's create repeats an existence
+	 * check before adapter.write, so it is the best available narrow-window guard,
+	 * not an atomic one: an external writer can still land between those two calls.
 	 */
 	async createNew(path: string, content: string): Promise<void> {
 		if (!isSafeVaultPath(path)) throw new UnsafePath(path);
@@ -113,13 +114,13 @@ export class VaultOps {
 		return results;
 	}
 
-	/** Restore without clobber; every occupied destination aborts. */
+	/** Restore with the best available occupied-path guard. */
 	async restoreTo(copy: TFile, originalPath: string): Promise<void> {
 		const content = await this.app.vault.read(copy);
-		// This lookup only recognizes a destination already occupied. It
-		// NEVER authorizes the write and is not the old check-then-act scheme:
-		// create() remains the sole no-clobber safety guard. If the path is empty
-		// now but occupied before create runs, create throws and nothing is clobbered.
+		// This lookup only recognizes a destination already occupied; it never
+		// authorizes the write. create() repeats an existence check, but its later
+		// adapter.write can still race an external writer. No plugin API can lock
+		// Syncthing out of that narrow window.
 		const existing = this.app.vault.getAbstractFileByPath(originalPath);
 		// Any occupant aborts, file or folder alike. Round three tried to treat an
 		// identical-content file as proof of its own earlier create; byte equality

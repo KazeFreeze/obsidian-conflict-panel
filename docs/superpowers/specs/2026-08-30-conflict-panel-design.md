@@ -10,8 +10,8 @@ leaving Obsidian**. Standalone repo. Desktop and Android, one responsive UI.
 recovery folder.
 
 This is not caution for its own sake. Five shipped plugins were audited against source and three had
-real data-loss paths. Every one of them was in a delete call. A plugin that cannot delete cannot lose
-your notes.
+real data-loss paths. Every one of them was in a delete call. Removing deletion eliminates those
+paths; it does not eliminate overwrite races in Obsidian's create and rename implementations.
 
 ## Revision history
 
@@ -69,14 +69,15 @@ Authoritative. Earlier revisions contradicted themselves by describing actions i
 
 | action | result |
 |---|---|
-| Restore copy *X* to the original path | Read *X*, atomically create the original with `vault.create`, then move *X* to recovery. **Warned explicitly:** this resurrects a file another device deliberately deleted, and Syncthing propagates that resurrection everywhere. Remaining copies move to recovery. |
+| Restore copy *X* to the original path | Read *X*, create the original with `vault.create` using the best available occupied-path guard, then move *X* to recovery. **Warned explicitly:** this resurrects a file another device deliberately deleted, and Syncthing propagates that resurrection everywhere. Remaining copies move to recovery. |
 | Accept the deletion | all copies moved to recovery |
 | Do nothing | untouched |
 
 With several copies the user picks **one** *X*. There is no "save them all"; the rest are preserved
 in recovery and can be retrieved by hand.
 
-**An orphan whose original reappears mid-decision aborts.** See the no-clobber rule.
+**An orphan whose original reappears and is observed by either occupancy check aborts.** The
+narrow external-writer window in the no-clobber section remains.
 
 **Opaque groups are move-only in v0.1.** `Vault.process` is text-only and there is no binary
 equivalent, so "keep copy *X*" would require an unguarded `modifyBinary` with no version
@@ -117,18 +118,18 @@ for (const copy of group.copies) {
 }
 ```
 
-**No-clobber is mandatory for restoration.** `Vault.create(path, data)` is the public atomic
-no-clobber primitive: it throws if the original path is occupied. Restore therefore reads the copy,
-recognises a destination that is already occupied, creates the original, and only then archives the
-copy. The lookup never authorises the write: `create` remains the sole safety guard, so a destination
-that appears after lookup still makes create fail without clobbering it. A confirmed existing file or
-folder becomes `DestinationOccupied`; a create failure changes nothing; an archive failure after
-create leaves a duplicate. Every occupied destination aborts, including a file with identical bytes
-and `restoreTo(copy, copy.path)`; byte equality cannot prove that this plugin created the file.
+**Restoration uses the narrowest no-clobber window the public API offers.** `Vault.create(path,
+data)` first awaits `adapter.exists`, then calls overwrite-capable `adapter.write`. It usually throws
+when the original path is occupied, but it is not atomic: Syncthing can create a destination after
+that internal check and before the write. No plugin API can lock an external filesystem writer out
+of that window. Restore therefore rejects occupancy visible through its own lookup, calls `create`,
+and only then archives the copy. The lookup never authorises the write. A confirmed existing file or
+folder becomes `DestinationOccupied`; a create failure leaves the conflict copy untouched; an
+archive failure after create leaves a duplicate. Byte equality never proves provenance.
 
 If creation succeeds and archival fails, `RestoreArchiveFailed` carries `originalPath`, `copyPath`,
-and the raw cause. Its message leads with the known outcome: restoration succeeded, both files are
-still present, and nothing was lost. The user can move or delete the conflict copy manually. There is
+and the raw cause. Its message leads with the known outcome: restoration succeeded and the restored
+file and conflict copy are both present. The user can move or delete the conflict copy manually. There is
 no automatic retry because safely proving provenance would require durable operation state.
 
 **Create-error classification is limited by the public API.** Obsidian exposes no typed create
@@ -136,9 +137,10 @@ error. If lookup saw an empty path and `create` then fails, callers cannot relia
 race-created destination from permissions or an invalid path. The raw cause is preserved rather than
 guessed, and the UI must not claim a specific cause for that failure.
 
-Recovery archival still uses a checked `vault.rename`, whose contract does not promise no-clobber.
-The Adapter check sees unloaded artifacts and narrows the window, but cannot close it. A concurrent
-archive can occupy the checked destination before rename, and the rename may overwrite that
+Recovery archival uses a checked `vault.rename`. Obsidian's implementation also checks existence
+before its rename, so it has the same narrow-window guard as `create`, not an atomic guarantee. The
+Adapter check sees unloaded artifacts and narrows the window further, but cannot close it. A
+concurrent archive can occupy the checked destination before rename, and the rename may overwrite that
 **previously archived losing version**. That is real data loss even though the current copy survives.
 
 **Exact string equality, not SHA-256.** The reviewed text is already retained for the diff.
@@ -189,8 +191,9 @@ also what makes the destination check useful: `adapter.stat()` sees and identifi
 `.conflictbak` that `getAbstractFileByPath()` would miss and report as free.
 
 **Restore creates, then archives.** For Markdown orphans, it reads the conflict copy, calls
-`vault.create` at the original path, and only after that succeeds moves the copy to recovery. If the
-path is occupied, create aborts atomically. If archival then fails, both copies remain. Opaque groups
+`vault.create` at the original path, and only after that succeeds moves the copy to recovery. If
+creation's internal occupancy check sees the path, it aborts; the external-writer race above remains.
+If archival then fails, both copies remain. Opaque groups
 do not offer restore in v0.1.
 
 **Index staleness is accepted, not solved.** Renaming `.md` to an unsupported extension does not
@@ -260,12 +263,17 @@ surrounding-slash, whitespace, and Unicode behavior, then the plugin explicitly 
 root rejects the entire setting to the default rather than silently clamping it; a path that resolves
 to the vault root also falls back to the default. The resulting canonical value is passed unchanged
 to grouping, folder creation, and archive naming. This handles leading or repeated separators, dot
-segments, and backslashes without assuming undocumented behavior from Obsidian, allowing an Adapter
-path outside the vault, or letting three implementations disagree.
+segments, and backslashes without assuming undocumented behavior from Obsidian, allowing a lexical
+Adapter path outside the vault, or letting three implementations disagree. Symlinks remain the
+explicit limitation below.
 `core/group.ts` rejects that recovery root outright. The non-note extension is defence in depth: an
 ordinary note can legitimately contain a valid-looking `.sync-conflict-*` sequence, especially with
 multiple extensions, so filename rules alone are insufficient. A Syncthing conflict *of an archived
 file* stays inside the excluded folder and is excluded too. Regression test required.
+
+This validation is lexical. It rejects encoded traversal and non-canonical relative paths, but it
+does not confine writes through symlinks: a vault entry such as `link -> ../outside` can make the
+lexically valid `link/outside.md` resolve outside the vault.
 
 ## Honest failure behaviour
 
@@ -277,17 +285,17 @@ file* stays inside the excluded folder and is excluded too. Regression test requ
 | write rejects, or app dies mid-write | **original may be truncated** |
 | `process` succeeds, then app dies | resolved original, copies unmoved — benign, rediscovered |
 | restore create finds an occupied original | clean abort, copy untouched |
+| external writer lands between create's internal exists and write | that destination can be overwritten |
 | restore create fails after an empty lookup | clean abort with raw, unclassified cause; copy untouched |
-| restore create succeeds, then archive fails | `RestoreArchiveFailed`; original and copy both remain, nothing lost; manual cleanup |
+| restore create succeeds, then archive fails | `RestoreArchiveFailed`; original and copy both remain; manual cleanup |
 | a copy changes between review and move | the *current* content is moved, not the reviewed content |
 | `rename` throws on one copy | that copy stays, others still processed |
 | recovery destination appears after its check | **previously archived losing version can be overwritten** |
 | later editor autosave lands | **can overwrite the result** |
 
-Three are genuinely harmful and all three are writes, not deletes. They are narrowed, not
-eliminated. Note rows five and six: because cleanup moves rather than deletes, an interrupted or
-racing cleanup **cannot lose content**. Worst case a file is filed away holding something newer than
-what was reviewed, and it is still sitting there to read.
+The harmful cases are writes, not deletes. They are narrowed, not eliminated. Moving rather than
+deleting preserves the current conflict copy, but a recovery-destination race can still overwrite a
+previously archived losing version.
 
 ## The editor guard
 
@@ -295,11 +303,12 @@ The public API exposes no `isDirty`, no pending-autosave status, and no save-gen
 `dirty`, `unsaved` and `isDirty` appear nowhere in the 1.13.1 typings. There is a reproducible
 community report of a pending two-second editor save defeating `process()`.
 
-**Policy: refuse while any file in the group is open in any editor.** Discovered via
+**Policy: refuse when a group file is visible as open through workspace leaves.** Discovered via
 `workspace.iterateAllLeaves()`, which includes sidebar and pop-out leaves. Do not save-then-proceed;
 saving adds a write without making the race impossible. Re-check immediately before `process`.
 
-This cannot discover embedded editors from other plugins, nor stop a note being opened mid-operation.
+This is a narrowing, not a guarantee. It cannot discover Markdown embedded as a Canvas card or
+editors from other plugins, stop a note being opened mid-operation, or remain current across awaits.
 
 ## Architecture
 
@@ -322,9 +331,11 @@ diff), `vault-ops.ts` (the only module permitted to write, move or create), `not
 3. **Input-version precondition.** The only content replacement checks equality against the reviewed
    text, inside `process`.
 4. **Cleanup preserves.** Copies are moved, never copied-then-removed.
-5. **Restoration is atomic no-clobber.** `vault.create` fails if the original is occupied. Recovery
-   rename destinations are checked, but their check-to-rename race remains and is documented.
-6. **Refuse while any group file is open in an editor.**
+5. **Restoration narrows the clobber window.** `vault.create` checks occupancy before its
+   overwrite-capable write; the remaining external-writer race is documented. Recovery rename
+   destinations have the same limitation.
+6. **Narrow editor races.** Refuse when any group file is visible as open through workspace leaves;
+   embedded editors and changes during awaited work remain limitations.
 7. **Resurrection is warned.** Restoring an orphan copy to its original path states plainly that it
    propagates to every device.
 8. **Every control has a visible text label**, ≥48dp touch target, adequate separation.

@@ -8,7 +8,7 @@ interface Artifact {
 	path: string;
 	sourcePath: string;
 	bytes: number;
-	/** False when the decoded path would escape the vault. */
+	/** False when the decoded path contains traversal or is not canonical. */
 	safe: boolean;
 }
 
@@ -81,7 +81,7 @@ export class ConflictRecoveryView extends ItemView {
 			item.createDiv({ text: artifact.sourcePath, cls: "conflict-panel__path" });
 			if (!artifact.safe) {
 				item.createDiv({
-					text: `This archive names a path outside the vault, so it cannot be copied back here. The file itself is intact at ${artifact.path}.`,
+					text: `This archive does not name a canonical vault-relative path, so it cannot be copied back. The file itself is intact at ${artifact.path}.`,
 					cls: "conflict-compare__warning",
 				});
 				continue;
@@ -101,6 +101,8 @@ export class ConflictRecoveryView extends ItemView {
 
 	private async restore(artifact: Artifact): Promise<void> {
 		try {
+			// No editor guard is needed here: createNew only targets an empty path,
+			// so there is no existing file at that path for an editor to have open.
 			const content = await this.app.vault.adapter.read(artifact.path);
 			await this.ops().createNew(artifact.sourcePath, content);
 			new Notice(`Copied back to ${artifact.sourcePath}. The archive is still in recovery.`);

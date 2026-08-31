@@ -338,7 +338,7 @@ describe("VaultOps restore", () => {
 			cause: archiveFailure,
 		});
 		expect(error.message).toBe(
-			"Restored original.md successfully. The conflict copy copy.md could not be moved to recovery, so both files are still present and nothing was lost. Move or delete the copy yourself when convenient.",
+			"Restored original.md successfully. The conflict copy copy.md could not be moved to recovery, so the restored file and conflict copy are both present. Move or delete the copy yourself when convenient.",
 		);
 		expect(vault.files.get("original.md")).toBe("copy contents");
 		expect(vault.files.get("copy.md")).toBe("copy contents");
