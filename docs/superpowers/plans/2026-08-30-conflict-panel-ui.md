@@ -41,15 +41,28 @@ restoreTo(copy: TFile, originalPath: string): Promise<void>
 
 ## Constraints this phase inherits
 
-**`toHunks` blocks.** It is bounded but not cooperative: accepted input up to its thresholds
-takes roughly 180ms of synchronous work. **Never call it during a render pass or an event
-handler that must stay responsive.** Compute once when a group is opened, store the result,
-and render from the stored value.
+**`toHunks` blocks.** It is bounded but not cooperative: input it accepts, right up to
+100,000 chars / 1,000 lines, costs up to a 500ms budget of synchronous work. Two rules follow,
+and the first draft of this plan broke both.
+
+1. **Never call it during a render pass or an event handler that must stay responsive.**
+   Compute once when a group is loaded and render from the stored `DiffResult`.
+2. The spec requires **an additional UI guard for accepted-but-large input**. Task 3 adds it:
+   a soft band below which the diff computes on its own, and above which the user presses a
+   button, so the one blocking call is deliberate and attributable.
 
 **The editor guard is this phase's job.** The core has no idea whether a file is open.
 Nothing may call `VaultOps` while any file in the group is open in an editor, because a
-pending editor autosave can overwrite the result. That guard does not exist yet and must be
-built here.
+pending editor autosave can overwrite the result. That guard does not exist yet.
+
+**Only `src/vault-ops.ts` may mutate the vault.** `src/boundaries.test.ts` greps every source
+file for `vault.process|rename|create|modify` and fails on a match outside that one file. A
+view that calls `vault.create` directly turns the suite red. Every write this phase needs goes
+through `VaultOps`, which is why Task 4 exists.
+
+**No check-then-act anywhere.** `create` throwing on an occupied path is the sole no-clobber
+guard. An `exists()` lookup may only *reject*; it may never authorise a write. This was removed
+from core restore across three review rounds and must not come back in a view.
 
 **Every control needs a visible text label** and a ≥48dp touch target. Two buttons
 distinguished only by a tooltip is the exact defect that made an audited plugin unusable on
@@ -64,12 +77,14 @@ Android.
 
 | file | responsibility |
 |---|---|
+| `src/core/diff.ts` | *Modified.* Add `needsConfirmation`, the soft band above which the diff is user-initiated. |
+| `src/vault-ops.ts` | *Modified.* Add `createNew`, the only write path the views get. |
 | `src/scan.ts` | Build `VaultIndex` from the vault, call `groupConflicts`, cache the result. |
-| `src/editor-guard.ts` | Answer "is any file in this group open in an editor?" Pure enough to test with a fake workspace. |
+| `src/editor-guard.ts` | Answer "is any file in this group open in an editor?" Testable with a fake workspace. |
 | `src/panel-view.ts` | Sidebar `ItemView`: the group list and count. |
-| `src/compare-view.ts` | Main-tab `ItemView`: diff, actions, and the calls into `VaultOps`. |
-| `src/recovery-view.ts` | Recovery list over `DataAdapter`, with restore. |
-| `src/main.ts` | Registers views, commands, ribbon; owns the scan cache. |
+| `src/compare-view.ts` | Main-tab `ItemView`: diff and actions. Calls `VaultOps`, never the vault. |
+| `src/recovery-view.ts` | Recovery list over `DataAdapter`, restoring through `VaultOps.createNew`. |
+| `src/main.ts` | Registers views, commands, ribbon; owns the scan cache and the `VaultOps` instance. |
 
 ---
 
@@ -254,7 +269,155 @@ git commit -m "feat: refuse to resolve while a group file is open in an editor"
 
 ---
 
-### Task 3: `src/panel-view.ts`
+### Task 3: `needsConfirmation` in `src/core/diff.ts`
+
+The UI guard the spec asks for, kept in `core/` because it is a pure predicate and belongs
+next to the thresholds it shadows.
+
+**Files:**
+- Modify: `src/core/diff.ts`, `src/core/diff.test.ts`
+
+- [ ] **Step 1: Add the failing tests to `src/core/diff.test.ts`**
+
+```ts
+import { needsConfirmation } from "./diff";
+
+describe("needsConfirmation", () => {
+	it("lets small input compare without asking", () => {
+		expect(needsConfirmation("a\nb", "a\nc")).toBe(false);
+	});
+
+	it("asks before comparing input past the soft character band", () => {
+		expect(needsConfirmation("x".repeat(25_001), "y")).toBe(true);
+	});
+
+	it("asks before comparing input past the soft line band", () => {
+		expect(needsConfirmation("x\n".repeat(251), "y")).toBe(true);
+	});
+
+	it("asks when only the right side is large", () => {
+		expect(needsConfirmation("y", "x".repeat(25_001))).toBe(true);
+	});
+
+	it("does not ask exactly at the band", () => {
+		expect(needsConfirmation("x".repeat(25_000), "y")).toBe(false);
+	});
+});
+```
+
+- [ ] **Step 2: Run and confirm they fail**
+
+Run: `npm test -- diff`
+Expected: FAIL, `needsConfirmation is not a function`.
+
+- [ ] **Step 3: Implement it**
+
+```ts
+// A fifth of the hard limit. Below this the diff is cheap enough to run
+// unannounced; above it the 500ms freeze is noticeable, so the user asks for it
+// and can attribute the pause. toHunks still rejects anything past MAX_INPUT_*.
+const SOFT_INPUT_CHARS = 25_000;
+const SOFT_INPUT_LINES = 250;
+
+const pastSoftBand = (value: string): boolean => {
+	if (value.length > SOFT_INPUT_CHARS) return true;
+	let lineCount = 0;
+	for (let i = 0; i < value.length; i++) {
+		if (value.charCodeAt(i) === 10 && ++lineCount > SOFT_INPUT_LINES) return true;
+	}
+	return false;
+};
+
+/**
+ * Should the view make the user press a button before diffing?
+ *
+ * toHunks is synchronous and uncooperative. It refuses genuinely huge input, but
+ * everything it ACCEPTS still blocks the main thread for up to 500ms. This is the
+ * guard for that accepted-but-large band.
+ */
+export function needsConfirmation(left: string, right: string): boolean {
+	return pastSoftBand(left) || pastSoftBand(right);
+}
+```
+
+- [ ] **Step 4: Run and confirm they pass**
+
+Run: `npm test -- diff`
+Expected: PASS, existing tests plus 5.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/core/diff.ts src/core/diff.test.ts
+git commit -m "feat: make an expensive diff user-initiated rather than automatic"
+```
+
+---
+
+### Task 4: `VaultOps.createNew`
+
+Both remaining writes in this phase — save-as-new, and restoring a recovery artifact — are
+"create a file at a path that must be empty". That is exactly what `restoreTo` already does
+internally. Expose it once rather than letting two views reach for `vault.create` and turn
+`boundaries.test.ts` red.
+
+**Files:**
+- Modify: `src/vault-ops.ts`, `src/vault-ops.test.ts`
+
+- [ ] **Step 1: Add the failing tests**
+
+```ts
+describe("createNew", () => {
+	it("writes the content at an empty path", async () => { /* assert exact content */ });
+
+	it("throws DestinationOccupied when a file already holds the path", async () => {
+		await expect(ops.createNew("note.md", "x")).rejects.toBeInstanceOf(DestinationOccupied);
+	});
+
+	it("throws DestinationOccupied when a FOLDER holds the path", async () => { /* ... */ });
+
+	it("leaves the existing file byte-identical when it refuses", async () => { /* ... */ });
+});
+```
+
+The fourth is the one that must fail against a broken implementation: a `createNew` that
+overwrites passes the first three.
+
+- [ ] **Step 2: Run and confirm they fail**
+
+Run: `npm test -- vault-ops`
+
+- [ ] **Step 3: Implement**
+
+```ts
+	/**
+	 * Create a file at a path that must be empty.
+	 *
+	 * The lookup only RECOGNISES an occupied path. It never authorises the write:
+	 * `create` remains the sole no-clobber guard, exactly as in `restoreTo`. Do not
+	 * turn this into a check-then-act by acting on what the lookup returns.
+	 */
+	async createNew(path: string, content: string): Promise<void> {
+		if (this.app.vault.getAbstractFileByPath(path)) throw new DestinationOccupied(path);
+		await this.app.vault.create(path, content);
+	}
+```
+
+- [ ] **Step 4: Run and confirm they pass**
+
+Run: `npm test`
+Expected: all green, including `boundaries`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/vault-ops.ts src/vault-ops.test.ts
+git commit -m "feat: give the views one guarded create instead of raw vault access"
+```
+
+---
+
+### Task 5: `src/panel-view.ts`
 
 **Files:**
 - Create: `src/panel-view.ts`
@@ -403,28 +566,24 @@ git commit -m "feat: sidebar panel listing conflict groups with a count"
 
 ---
 
-### Task 4: `src/compare-view.ts`
+### Task 6: `src/compare-view.ts`
 
 The only surface that calls `VaultOps`. Every action goes through the editor guard first.
+**No `vault.*` call appears in this file** — `boundaries.test.ts` enforces it.
 
 **Files:**
 - Create: `src/compare-view.ts`
 - Modify: `src/main.ts`, `styles.css`
 
-- [ ] **Step 1: Implement the view shell and the diff**
+- [ ] **Step 1: The view shell, with the diff computed OUTSIDE render**
 
 ```ts
 import { ItemView, Notice, TFile, WorkspaceLeaf } from "obsidian";
-import { toHunks } from "./core/diff";
+import { needsConfirmation, toHunks, type DiffResult } from "./core/diff";
 import { describeGroup } from "./core/entry-view";
 import type { ConflictGroup } from "./core/types";
 import { blockingPaths, openPathsIn } from "./editor-guard";
-import {
-	DestinationOccupied,
-	RestoreArchiveFailed,
-	StaleInput,
-	VaultOps,
-} from "./vault-ops";
+import { DestinationOccupied, RestoreArchiveFailed, StaleInput, VaultOps } from "./vault-ops";
 
 export const CONFLICT_COMPARE_VIEW = "conflict-panel-compare";
 
@@ -434,6 +593,9 @@ export class ConflictCompareView extends ItemView {
 	/** Held OUTSIDE the DOM: Android can destroy and rebuild a view at any await. */
 	private reviewedOriginal: string | null = null;
 	private reviewedCopy: string | null = null;
+	/** null means "not computed yet", which is distinct from an empty hunk list. */
+	private diff: DiffResult | null = null;
+	private awaitingConfirmation = false;
 	private busy = false;
 
 	constructor(
@@ -444,37 +606,47 @@ export class ConflictCompareView extends ItemView {
 		super(leaf);
 	}
 
-	getViewType(): string {
-		return CONFLICT_COMPARE_VIEW;
-	}
-
-	getDisplayText(): string {
-		return this.group ? `Conflict: ${this.group.originalPath}` : "Conflict";
-	}
-
-	getIcon(): string {
-		return "git-compare";
-	}
+	getViewType(): string { return CONFLICT_COMPARE_VIEW; }
+	getDisplayText(): string { return this.group ? `Conflict: ${this.group.originalPath}` : "Conflict"; }
+	getIcon(): string { return "git-compare"; }
 
 	async setGroup(group: ConflictGroup): Promise<void> {
 		this.group = group;
 		this.selectedCopy = 0;
-		await this.loadContents();
+		await this.loadSelection();
 		this.render();
 	}
 
 	/**
-	 * Read both sides ONCE and keep them. toHunks is bounded but BLOCKING —
-	 * roughly 180ms of synchronous work at its thresholds — so it must never run
-	 * during a render pass or an event handler.
+	 * Read both sides and decide about the diff ONCE.
+	 *
+	 * toHunks is bounded but BLOCKING, so it must never run inside render() or an
+	 * event handler. Past the soft band it does not run here either: the view shows
+	 * a button, and the freeze becomes something the user asked for.
 	 */
-	private async loadContents(): Promise<void> {
-		const group = this.group;
-		if (!group) return;
+	private async loadSelection(): Promise<void> {
 		const copy = this.copyFile();
-		this.reviewedCopy = copy ? await this.app.vault.read(copy) : null;
 		const original = this.originalFile();
+		this.reviewedCopy = copy ? await this.app.vault.read(copy) : null;
 		this.reviewedOriginal = original ? await this.app.vault.read(original) : null;
+		this.diff = null;
+		this.awaitingConfirmation = false;
+
+		const left = this.reviewedOriginal;
+		const right = this.reviewedCopy;
+		if (left === null || right === null) return;
+		if (needsConfirmation(left, right)) this.awaitingConfirmation = true;
+		else this.diff = toHunks(left, right);
+	}
+
+	/** The one deliberate blocking call, reached only by pressing the button. */
+	private computeOnDemand(): void {
+		const left = this.reviewedOriginal;
+		const right = this.reviewedCopy;
+		if (left === null || right === null) return;
+		this.awaitingConfirmation = false;
+		this.diff = toHunks(left, right);
+		this.render();
 	}
 
 	private originalFile(): TFile | null {
@@ -491,7 +663,7 @@ export class ConflictCompareView extends ItemView {
 }
 ```
 
-- [ ] **Step 2: Add the render method to the same class**
+- [ ] **Step 2: Render, reading only stored state**
 
 ```ts
 	private render(): void {
@@ -504,13 +676,8 @@ export class ConflictCompareView extends ItemView {
 		const view = describeGroup(group);
 
 		root.createEl("h3", { text: group.originalPath });
-
-		if (view.explanation) {
-			root.createEl("p", { text: view.explanation, cls: "conflict-compare__explanation" });
-		}
-		if (view.warning) {
-			root.createEl("p", { text: view.warning, cls: "conflict-compare__warning" });
-		}
+		if (view.explanation) root.createEl("p", { text: view.explanation, cls: "conflict-compare__explanation" });
+		if (view.warning) root.createEl("p", { text: view.warning, cls: "conflict-compare__warning" });
 
 		this.renderCopyPicker(root, group);
 		if (view.diffable) this.renderDiff(root);
@@ -526,22 +693,29 @@ export class ConflictCompareView extends ItemView {
 			if (i === this.selectedCopy) button.addClass("is-selected");
 			button.addEventListener("click", () => {
 				this.selectedCopy = i;
-				void this.loadContents().then(() => this.render());
+				void this.loadSelection().then(() => this.render());
 			});
 		});
 	}
 
+	/** Renders STORED state. Never computes: see loadSelection. */
 	private renderDiff(root: HTMLElement): void {
-		const left = this.reviewedOriginal;
-		const right = this.reviewedCopy;
-		if (left === null || right === null) return;
-
-		const result = toHunks(left, right);
 		const box = root.createDiv({ cls: "conflict-compare__diff" });
-		if (result.status === "too-large") {
+
+		if (this.awaitingConfirmation) {
 			box.createEl("p", {
-				text: "These files are too large to compare here. Open them side by side instead.",
+				text: "These files are large. Comparing them will freeze Obsidian for up to half a second.",
 			});
+			box
+				.createEl("button", { text: "Compare anyway" })
+				.addEventListener("click", () => this.computeOnDemand());
+			return;
+		}
+
+		const result = this.diff;
+		if (result === null) return;
+		if (result.status === "too-large") {
+			box.createEl("p", { text: "These files are too large to compare here. Open them side by side instead." });
 			return;
 		}
 		if (result.hunks.length === 0) {
@@ -550,17 +724,17 @@ export class ConflictCompareView extends ItemView {
 		}
 		for (const hunk of result.hunks) {
 			const el = box.createDiv({ cls: "conflict-compare__hunk" });
-			for (const line of hunk.left) {
-				el.createDiv({ text: line, cls: "conflict-compare__line is-left" });
-			}
-			for (const line of hunk.right) {
-				el.createDiv({ text: line, cls: "conflict-compare__line is-right" });
-			}
+			for (const line of hunk.left) el.createDiv({ text: line, cls: "conflict-compare__line is-left" });
+			for (const line of hunk.right) el.createDiv({ text: line, cls: "conflict-compare__line is-right" });
 		}
 	}
 ```
 
-- [ ] **Step 3: Add the actions, each gated by the editor guard**
+- [ ] **Step 3: Actions, each gated, each matching the spec's action matrix**
+
+The matrix in the spec is authoritative. **`keep-copy` and `restore-copy` move ALL copies to
+recovery, not just the selected one** — the user picks one *X* to keep, and every other copy is
+preserved in recovery rather than left behind to be rediscovered.
 
 ```ts
 	private renderActions(root: HTMLElement, actions: readonly string[]): void {
@@ -580,24 +754,22 @@ export class ConflictCompareView extends ItemView {
 		}
 	}
 
-	/** Single entry point into VaultOps. Guards, then dispatches, then reports. */
+	/** Single entry point into VaultOps. Guards, dispatches, reports. */
 	private async run(action: string): Promise<void> {
 		const group = this.group;
 		if (!group || this.busy) return;
 
 		const blocked = blockingPaths(group, openPathsIn(this.app.workspace));
 		if (blocked.length > 0) {
-			new Notice(
-				`Close ${blocked.join(", ")} first. A pending editor save could overwrite the result.`,
-			);
+			new Notice(`Close ${blocked.join(", ")} first. A pending editor save could overwrite the result.`);
 			return;
 		}
 
 		this.busy = true;
 		try {
-			await this.dispatch(action);
+			const resolved = await this.dispatch(action);
 			await this.afterResolve();
-			this.leaf.detach();
+			if (resolved) this.leaf.detach();
 		} catch (error) {
 			this.report(error);
 		} finally {
@@ -605,57 +777,73 @@ export class ConflictCompareView extends ItemView {
 		}
 	}
 
-	private async dispatch(action: string): Promise<void> {
+	/** Every copy in the group, as TFiles that still exist. */
+	private allCopyFiles(): TFile[] {
+		return (this.group?.copies ?? [])
+			.map((c) => this.app.vault.getAbstractFileByPath(c.path))
+			.filter((f): f is TFile => f instanceof TFile);
+	}
+
+	private async archiveAll(files: TFile[]): Promise<void> {
+		const results = await this.ops.moveAllToRecovery(files);
+		const failed = results.filter((r) => r.status === "failed").length;
+		new Notice(
+			failed === 0
+				? `Moved ${results.length} to recovery.`
+				: `Moved ${results.length - failed}, ${failed} failed. Nothing was deleted.`,
+		);
+	}
+
+	/** Returns whether the group is resolved and the tab should close. */
+	private async dispatch(action: string): Promise<boolean> {
 		const group = this.group;
-		if (!group) return;
+		if (!group) return false;
 		const copy = this.copyFile();
 		const original = this.originalFile();
 
 		if (action === "keep-original" || action === "accept-deletion") {
-			const files = group.copies
-				.map((c) => this.app.vault.getAbstractFileByPath(c.path))
-				.filter((f): f is TFile => f instanceof TFile);
-			const results = await this.ops.moveAllToRecovery(files);
-			const failed = results.filter((r) => r.status === "failed").length;
-			new Notice(
-				failed === 0
-					? `Moved ${results.length} to recovery.`
-					: `Moved ${results.length - failed}, ${failed} failed. Nothing was deleted.`,
-			);
-			return;
+			await this.archiveAll(this.allCopyFiles());
+			return true;
 		}
 
 		if (action === "keep-copy") {
-			if (!original || !copy || this.reviewedOriginal === null || this.reviewedCopy === null) return;
+			if (!original || !copy || this.reviewedOriginal === null || this.reviewedCopy === null) return false;
 			await this.ops.replaceOriginal(original, this.reviewedOriginal, this.reviewedCopy);
-			await this.ops.moveAllToRecovery([copy]);
+			// Spec: ALL copies move to recovery, the kept one included.
+			await this.archiveAll(this.allCopyFiles());
 			new Notice(`${group.originalPath} now holds the selected copy.`);
-			return;
+			return true;
 		}
 
 		if (action === "restore-copy") {
-			if (!copy) return;
+			if (!copy) return false;
+			// restoreTo archives the copy it restored; the remaining ones follow.
 			await this.ops.restoreTo(copy, group.originalPath);
+			const rest = this.allCopyFiles();
+			if (rest.length > 0) await this.archiveAll(rest);
 			new Notice(`Restored ${group.originalPath}.`);
-			return;
+			return true;
 		}
 
 		if (action === "save-as-new") {
-			if (!copy || this.reviewedCopy === null) return;
-			const target = `${group.originalPath.replace(/\.md$/, "")} (from ${group.copies[this.selectedCopy].deviceId}).md`;
-			await this.app.vault.create(target, this.reviewedCopy);
+			if (!copy || this.reviewedCopy === null) return false;
+			const device = group.copies[this.selectedCopy].deviceId;
+			const target = `${group.originalPath.replace(/\.md$/, "")} (from ${device}).md`;
+			// Through VaultOps: this file may not call vault.create. See boundaries.test.ts.
+			await this.ops.createNew(target, this.reviewedCopy);
 			// Deliberately resolves nothing: both inputs stay and the group is
-			// rediscovered on the next scan. Say so rather than implying otherwise.
+			// rediscovered on the next scan. Say so, and keep the tab open.
 			new Notice(`Saved ${target}. The conflict is still unresolved.`);
+			return false;
 		}
+
+		return false;
 	}
 
 	private report(error: unknown): void {
 		if (error instanceof StaleInput) {
 			new Notice("That file changed while you were reviewing it. Nothing was written. Rescan and try again.");
-		} else if (error instanceof RestoreArchiveFailed) {
-			new Notice(String((error as Error).message));
-		} else if (error instanceof DestinationOccupied) {
+		} else if (error instanceof RestoreArchiveFailed || error instanceof DestinationOccupied) {
 			new Notice(String((error as Error).message));
 		} else {
 			new Notice(`That did not work: ${String(error)}`);
@@ -671,8 +859,6 @@ this.registerView(
 	(leaf) => new ConflictCompareView(leaf, this.ops, () => this.rescan()),
 );
 ```
-
-and
 
 ```ts
 async openCompareView(group: ConflictGroup): Promise<void> {
@@ -716,19 +902,29 @@ Append to `styles.css`:
 - [ ] **Step 6: Verify and commit**
 
 Run: `npm test && npm run build && npm run lint`
-Expected: all pass.
+Expected: all pass, `boundaries` included.
 
 ```bash
 git add src/compare-view.ts src/main.ts styles.css
 git commit -m "feat: compare view with guarded actions into VaultOps"
 ```
 
+The commit body must state that this file has no unit tests, because `ItemView` cannot be
+instantiated outside Obsidian.
+
 ---
 
-### Task 5: `src/recovery-view.ts`
+### Task 7: `src/recovery-view.ts`
 
 Reads archived artifacts through `DataAdapter`, because unsupported extensions may not be in
 the vault tree and `getAbstractFileByPath` would report them absent.
+
+**Restore here copies; it does not move.** The first draft used `adapter.exists` followed by
+`adapter.rename`, which is check-then-act — the pattern removed from core restore over three
+review rounds — and `rename` has no documented no-clobber guarantee. Instead the artifact is
+read and written through `VaultOps.createNew`, and **the artifact stays where it is.** Nothing
+in recovery is ever removed by this plugin, which the view already tells the user. That
+deletes the race rather than guarding it.
 
 **Files:**
 - Create: `src/recovery-view.ts`
@@ -738,7 +934,7 @@ the vault tree and `getAbstractFileByPath` would report them absent.
 
 ```ts
 import { ItemView, Notice, WorkspaceLeaf } from "obsidian";
-import { VaultOps } from "./vault-ops";
+import { DestinationOccupied, VaultOps } from "./vault-ops";
 
 export const CONFLICT_RECOVERY_VIEW = "conflict-panel-recovery";
 
@@ -751,22 +947,15 @@ interface Artifact {
 export class ConflictRecoveryView extends ItemView {
 	constructor(
 		leaf: WorkspaceLeaf,
+		private readonly ops: VaultOps,
 		private readonly recoveryFolder: string,
 	) {
 		super(leaf);
 	}
 
-	getViewType(): string {
-		return CONFLICT_RECOVERY_VIEW;
-	}
-
-	getDisplayText(): string {
-		return "Conflict recovery";
-	}
-
-	getIcon(): string {
-		return "archive";
-	}
+	getViewType(): string { return CONFLICT_RECOVERY_VIEW; }
+	getDisplayText(): string { return "Conflict recovery"; }
+	getIcon(): string { return "archive"; }
 
 	async onOpen(): Promise<void> {
 		await this.render();
@@ -776,8 +965,8 @@ export class ConflictRecoveryView extends ItemView {
 	 * Enumerate through the ADAPTER, not the Vault.
 	 *
 	 * `.conflictbak` is an unsupported extension, so Obsidian may not load it into
-	 * the vault tree at all when "Show all file types" is off. A TFile-based
-	 * listing would show an empty folder that is not empty.
+	 * the vault tree when "Show all file types" is off. A TFile-based listing would
+	 * show an empty folder that is not empty.
 	 */
 	private async listArtifacts(): Promise<Artifact[]> {
 		const adapter = this.app.vault.adapter;
@@ -790,6 +979,7 @@ export class ConflictRecoveryView extends ItemView {
 				const stat = await adapter.stat(file);
 				found.push({
 					path: file,
+					// Takes a full path: sourcePathFromRecovery slices at the last "/".
 					sourcePath: VaultOps.sourcePathFromRecovery(file),
 					bytes: stat?.size ?? 0,
 				});
@@ -810,30 +1000,32 @@ export class ConflictRecoveryView extends ItemView {
 			text: `${artifacts.length} recovered ${artifacts.length === 1 ? "file" : "files"}, ${Math.round(total / 1024)} KB`,
 		});
 		root.createEl("p", {
-			text: "Nothing here is ever deleted automatically. Remove these yourself when you no longer need them.",
+			text: "Nothing here is ever deleted automatically. Restoring copies a file back; the archive stays until you remove it yourself.",
 		});
 
 		for (const artifact of artifacts) {
 			const item = root.createDiv({ cls: "conflict-panel__item" });
 			item.createDiv({ text: artifact.sourcePath, cls: "conflict-panel__path" });
 			item
-				.createEl("button", { text: "Restore to its original path" })
+				.createEl("button", { text: "Copy back to its original path" })
 				.addEventListener("click", () => void this.restore(artifact));
 		}
 	}
 
 	private async restore(artifact: Artifact): Promise<void> {
-		const adapter = this.app.vault.adapter;
-		if (await adapter.exists(artifact.sourcePath)) {
-			new Notice(`${artifact.sourcePath} already exists. Nothing was moved.`);
-			return;
-		}
 		try {
-			await adapter.rename(artifact.path, artifact.sourcePath);
-			new Notice(`Restored ${artifact.sourcePath}.`);
+			const content = await this.app.vault.adapter.read(artifact.path);
+			// createNew is the only write path a view gets, and `create` inside it is
+			// the sole no-clobber guard. No exists()-then-write here.
+			await this.ops.createNew(artifact.sourcePath, content);
+			new Notice(`Copied back to ${artifact.sourcePath}. The archive is still in recovery.`);
 			await this.render();
 		} catch (error) {
-			new Notice(`Could not restore: ${String(error)}`);
+			if (error instanceof DestinationOccupied) {
+				new Notice(`${artifact.sourcePath} already exists. Nothing was written.`);
+			} else {
+				new Notice(`Could not restore: ${String(error)}`);
+			}
 		}
 	}
 }
@@ -844,7 +1036,7 @@ export class ConflictRecoveryView extends ItemView {
 ```ts
 this.registerView(
 	CONFLICT_RECOVERY_VIEW,
-	(leaf) => new ConflictRecoveryView(leaf, this.settings.recoveryFolder),
+	(leaf) => new ConflictRecoveryView(leaf, this.ops, this.settings.recoveryFolder),
 );
 
 this.addCommand({
@@ -861,26 +1053,42 @@ Expected: all pass.
 
 ```bash
 git add src/recovery-view.ts src/main.ts
-git commit -m "feat: recovery list reading archives through the adapter"
+git commit -m "feat: recovery list that copies artifacts back without deleting them"
 ```
+
+The commit body must state that this file has no unit tests, and that restore deliberately
+leaves the archive in place.
 
 ---
 
 ## Self-Review
 
-**Spec coverage.** The sidebar list with a count, the main-tab diff, the action matrix, the
-editor guard, the Recovery list, 48dp targets, visible text labels, device-ID labelling, and
-save-as-new stating that it resolves nothing all have a task. Every `VaultOps` entry point is
-reached through exactly one guarded method, `run()`.
+**Spec coverage.** The sidebar list with a count, the main-tab diff, the authoritative action
+matrix, the editor guard, the Recovery list, 48dp targets, visible text labels, device-ID
+labelling, and save-as-new stating that it resolves nothing all have a task. Every `VaultOps`
+entry point is reached through exactly one guarded method, `run()`.
+
+**Four corrections after the worker rejected the first draft.** All four were real:
+
+| defect in the first draft | fix |
+|---|---|
+| `toHunks` called inside `renderDiff` | computed in `loadSelection`, rendered from stored state |
+| no guard for accepted-but-large input, which the spec requires | Task 3 `needsConfirmation` plus a "Compare anyway" button |
+| `vault.create` in two views, which `boundaries.test.ts` fails | Task 4 `VaultOps.createNew` |
+| `keep-copy` and `restore-copy` archived only the selected copy | both archive every copy, per the spec matrix |
+
+A fifth followed from the third: recovery restore was `adapter.exists` then `adapter.rename`,
+check-then-act with no no-clobber guarantee. Restore now copies and leaves the archive alone,
+which removes the race instead of guarding it.
 
 **Known gaps this plan does not close, deliberately:**
-- Verified: `VaultOps.sourcePathFromRecovery` is `static` and slices at the last `/` itself,
-  so Task 5 may pass it a full adapter path unchanged.
-- The views have no unit tests. Obsidian's `ItemView` cannot be instantiated outside the app,
-  so `scan.ts` and `editor-guard.ts` are tested and the three views are not. That is a real
-  coverage hole and should be stated in the commit rather than glossed.
+- The three views have no unit tests. Obsidian's `ItemView` cannot be instantiated outside the
+  app, so `scan.ts`, `editor-guard.ts`, `core/diff.ts` and `vault-ops.ts` are tested and the
+  views are not. State it in the commits rather than glossing.
 - Nothing is verified on a real device. Every claim about touch targets and mobile layout is
   from CSS, not from an Android session.
+- `needsConfirmation` scans for newlines a second time after `toHunks` would. Two passes over
+  at most 100,000 chars is not worth sharing a helper across the module boundary.
 
 **Type consistency.** `ConflictGroup`, `EntryAction`, `DiffResult` and `RecoveryMoveResult` are
-used exactly as `src/core/` and `src/vault-ops.ts` define them today at `bf66329`.
+used exactly as `src/core/` and `src/vault-ops.ts` define them at `bf66329`.
