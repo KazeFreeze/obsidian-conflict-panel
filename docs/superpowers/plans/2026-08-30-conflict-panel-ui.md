@@ -409,6 +409,8 @@ describe("isSafeVaultPath", () => {
 		"/absolute.md",
 		"a//b.md",                // an empty segment
 		"a/./b.md",               // harmless but not a path we produced
+		"..\\outside.md",         // backslash is not canonical and traverses on Windows
+		"\\absolute.md",
 		"",
 	])("rejects %j", (path) => expect(isSafeVaultPath(path)).toBe(false));
 });
@@ -433,7 +435,7 @@ Expected: FAIL, cannot resolve `./safe-path`.
  * cannot predict. Refusing is the only honest answer.
  */
 export function isSafeVaultPath(path: string): boolean {
-	if (path === "" || path.startsWith("/")) return false;
+	if (path === "" || path.startsWith("/") || path.includes("\\")) return false;
 	return path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
 }
 ```
