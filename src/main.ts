@@ -85,8 +85,11 @@ export default class ConflictPanelPlugin extends Plugin {
 	}
 
 	async openCompareView(group: ConflictGroup): Promise<void> {
-		const leaf = this.app.workspace.getLeaf(true);
-		await leaf.setViewState({ type: CONFLICT_COMPARE_VIEW, active: true });
+		// Reuse the open compare tab instead of stacking one per click. Four tabs all
+		// titled "Conflict" is what happens otherwise, and none of them says which.
+		const [existing] = this.app.workspace.getLeavesOfType(CONFLICT_COMPARE_VIEW);
+		const leaf = existing ?? this.app.workspace.getLeaf(true);
+		if (!existing) await leaf.setViewState({ type: CONFLICT_COMPARE_VIEW, active: true });
 		// Since 1.7.2 setViewState can leave a DEFERRED view, so leaf.view is not yet
 		// a ConflictCompareView and the instanceof below would silently skip
 		// setGroup, opening a blank tab. revealLeaf awaits the real view.

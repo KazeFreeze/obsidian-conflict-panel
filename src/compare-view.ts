@@ -1,4 +1,5 @@
-import { ItemView, Notice, TFile, WorkspaceLeaf } from "obsidian";
+import { ItemView, TFile, WorkspaceLeaf } from "obsidian";
+import { notifyError, notifyInfo, notifySuccess, notifyWarning } from "./notify";
 import { needsConfirmation, toHunks, type DiffResult } from "./core/diff";
 import { describeGroup, type EntryAction } from "./core/entry-view";
 import type { ConflictGroup } from "./core/types";
@@ -71,7 +72,7 @@ export class ConflictCompareView extends ItemView {
 			this.diff = null;
 			this.awaitingConfirmation = false;
 			this.loading = false;
-			new Notice(`Could not read this conflict: ${String(error)}. Rescan and try again.`);
+			notifyError("Unreadable", `${String(error)} Rescan and try again.`);
 			return;
 		}
 		if (token !== this.loadToken) return;
@@ -180,13 +181,17 @@ export class ConflictCompareView extends ItemView {
 		}
 		for (const hunk of result.hunks) {
 			const element = box.createDiv({ cls: "conflict-compare__hunk" });
-			for (const line of hunk.left) {
-				element.createDiv({ text: line, cls: "conflict-compare__line is-left" });
-			}
-			for (const line of hunk.right) {
-				element.createDiv({ text: line, cls: "conflict-compare__line is-right" });
-			}
+			// A "-"/"+" gutter, not colour alone. The tint is a hint; the marker is
+			// what makes a hunk readable at low contrast or with colour vision loss.
+			for (const line of hunk.left) this.renderLine(element, "-", line, "is-left");
+			for (const line of hunk.right) this.renderLine(element, "+", line, "is-right");
 		}
+	}
+
+	private renderLine(parent: HTMLElement, marker: string, text: string, cls: string): void {
+		const row = parent.createDiv({ cls: `conflict-compare__line ${cls}` });
+		row.createSpan({ cls: "conflict-compare__marker", text: marker });
+		row.createSpan({ cls: "conflict-compare__text", text });
 	}
 
 	private renderActions(root: HTMLElement, actions: readonly EntryAction[]): void {
@@ -210,14 +215,15 @@ export class ConflictCompareView extends ItemView {
 		const group = this.group;
 		if (!group) return;
 		if (this.loading) {
-			new Notice("Wait for the selected copy to finish loading.");
+			notifyInfo("Loading", "Wait for the selected copy to finish reading.");
 			return;
 		}
 		if (this.busy) return;
 		const blocked = blockingPaths(group, openPathsIn(this.app.workspace));
 		if (blocked.length > 0) {
-			new Notice(
-				`Close ${blocked.join(", ")} first. A pending editor save could overwrite the result.`,
+			notifyWarning(
+				"Close it first",
+				`${blocked.join(", ")} is open. A pending editor save could overwrite the result.`,
 			);
 			return;
 		}
@@ -246,11 +252,16 @@ export class ConflictCompareView extends ItemView {
 		const expected = this.group?.copies.length ?? files.length;
 		const disappeared = Math.max(0, expected - files.length);
 		const missingNotice = this.disappearedNotice(disappeared);
-		new Notice(
-			failed === 0
-				? `Moved ${results.length} to recovery.${missingNotice}`
-				: `Moved ${results.length - failed}, ${failed} failed. Nothing was deleted.${missingNotice}`,
-		);
+		// Word-first title, detail underneath. A partial failure is a WARNING and
+		// therefore sticky: it names files the user still has to deal with by hand.
+		if (failed === 0) {
+			notifySuccess("Resolved", `Moved ${results.length} to recovery.${missingNotice}`);
+		} else {
+			notifyWarning(
+				"Partly moved",
+				`Moved ${results.length - failed}, ${failed} failed. Nothing was deleted.${missingNotice}`,
+			);
+		}
 	}
 
 	private disappearedNotice(count: number): string {
@@ -274,7 +285,7 @@ export class ConflictCompareView extends ItemView {
 			}
 			await this.ops().replaceOriginal(original, this.reviewedOriginal, this.reviewedCopy);
 			await this.archiveAll(this.allCopyFiles());
-			new Notice(`${group.originalPath} now holds the selected copy.`);
+			notifySuccess("Kept this copy", `${group.originalPath} now holds the selected copy.`);
 			return true;
 		}
 		if (action === "restore-copy") {
@@ -294,11 +305,14 @@ export class ConflictCompareView extends ItemView {
 			const moved = results.length - remainingFailed + (selectedArchiveFailed ? 0 : 1);
 			const disappeared = Math.max(0, group.copies.length - 1 - remaining.length);
 			const missingNotice = this.disappearedNotice(disappeared);
-			new Notice(
-				failed === 0
-					? `Restored ${group.originalPath}. Moved ${moved} to recovery.${missingNotice}`
-					: `Restored ${group.originalPath}. Moved ${moved} to recovery; ${failed} could not be moved. Nothing was deleted.${missingNotice}`,
-			);
+			if (failed === 0) {
+				notifySuccess("Restored", `${group.originalPath}. Moved ${moved} to recovery.${missingNotice}`);
+			} else {
+				notifyWarning(
+					"Restored, partly moved",
+					`${group.originalPath} is back. ${failed} could not be moved to recovery. Nothing was deleted.${missingNotice}`,
+				);
+			}
 			return true;
 		}
 		if (action === "save-as-new") {
@@ -307,7 +321,9 @@ export class ConflictCompareView extends ItemView {
 			if (!selected) return false;
 			const target = `${group.originalPath.replace(/\.md$/, "")} (from ${selected.deviceId}).md`;
 			await this.ops().createNew(target, this.reviewedCopy);
-			new Notice(`Saved ${target}. The conflict is still unresolved.`);
+			// Info, not success: this resolves nothing and the group returns on the
+			// next scan. Saying "saved" alone would read as done.
+			notifyInfo("Saved a copy", `${target}. The conflict is still unresolved.`);
 			return false;
 		}
 		return false;
@@ -315,17 +331,17 @@ export class ConflictCompareView extends ItemView {
 
 	private report(error: unknown): void {
 		if (error instanceof StaleInput) {
-			new Notice(
-				"That file changed while you were reviewing it. Nothing was written. Rescan and try again.",
+			notifyWarning(
+				"Changed while you looked",
+				"Nothing was written. Rescan and try again.",
+				{ label: "Rescan", run: () => void this.afterResolve() },
 			);
-		} else if (
-			error instanceof RestoreArchiveFailed ||
-			error instanceof DestinationOccupied ||
-			error instanceof UnsafePath
-		) {
-			new Notice(error.message);
+		} else if (error instanceof RestoreArchiveFailed) {
+			notifyWarning("Restored, not archived", error.message);
+		} else if (error instanceof DestinationOccupied || error instanceof UnsafePath) {
+			notifyWarning("Refused", error.message);
 		} else {
-			new Notice(`That did not work: ${String(error)}`);
+			notifyError("Failed", String(error));
 		}
 	}
 }

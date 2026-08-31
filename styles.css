@@ -143,18 +143,45 @@
 }
 
 .conflict-compare__line {
+	display: flex;
+	gap: 8px;
 	/* pre-wrap, not pre: preserve indentation, still wrap a long line. */
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
-	padding: 0 4px;
+	padding: 1px 6px;
+	/* Text stays the theme's body colour. A saturated block behind body text is
+	   the contrast problem this replaces: the tint carries the signal, not the
+	   text, so it must stay faint enough to read through. */
+	color: var(--text-normal);
+}
+
+.conflict-compare__marker {
+	flex: 0 0 auto;
+	font-weight: 600;
+	opacity: 0.75;
+	user-select: none;
+}
+
+.conflict-compare__text {
+	flex: 1 1 auto;
 }
 
 .conflict-compare__line.is-left {
-	background: var(--background-modifier-error);
+	background: rgba(var(--color-red-rgb), 0.12);
+	box-shadow: inset 2px 0 0 rgba(var(--color-red-rgb), 0.75);
+}
+
+.conflict-compare__line.is-left .conflict-compare__marker {
+	color: var(--text-error);
 }
 
 .conflict-compare__line.is-right {
-	background: var(--background-modifier-success);
+	background: rgba(var(--color-green-rgb), 0.12);
+	box-shadow: inset 2px 0 0 rgba(var(--color-green-rgb), 0.75);
+}
+
+.conflict-compare__line.is-right .conflict-compare__marker {
+	color: var(--text-success);
 }
 
 @media (max-width: 600px) {
@@ -162,4 +189,86 @@
 	.conflict-compare__copies button {
 		flex: 1 1 100%;
 	}
+}
+
+
+/* --- panel entry head: icon beside the path ----------------------------- */
+
+.conflict-panel__head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	max-width: 100%;
+}
+
+.conflict-panel__icon {
+	display: inline-flex;
+	align-items: center;
+	flex: 0 0 auto;
+	color: var(--text-muted);
+}
+
+.conflict-panel__icon svg {
+	width: 16px;
+	height: 16px;
+}
+
+/* Only a shape that needs a decision earns a coloured icon. `normal` stays
+   muted so eight ordinary conflicts do not read as eight warnings. */
+.conflict-panel__icon.is-orphan,
+.conflict-panel__icon.is-blocked {
+	color: var(--text-warning);
+}
+
+/* --- notices ------------------------------------------------------------ */
+
+.cp-notice-head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-weight: var(--font-semibold);
+}
+
+.cp-notice-icon {
+	display: inline-flex;
+	align-items: center;
+}
+
+.cp-notice-icon svg {
+	width: 16px;
+	height: 16px;
+}
+
+.cp-notice-detail {
+	margin-top: 4px;
+	color: var(--text-muted);
+}
+
+.cp-notice-action {
+	display: inline-block;
+	margin-top: 8px;
+	cursor: pointer;
+	color: var(--text-accent);
+}
+
+.cp-notice--success .cp-notice-icon {
+	color: var(--text-success);
+}
+
+.cp-notice--warning .cp-notice-icon {
+	color: var(--text-warning);
+}
+
+.cp-notice--error .cp-notice-icon {
+	color: var(--text-error);
+}
+
+.cp-notice--info .cp-notice-icon {
+	color: var(--text-muted);
+}
+
+.is-mobile .cp-notice-action {
+	min-height: 40px;
+	display: inline-flex;
+	align-items: center;
 }

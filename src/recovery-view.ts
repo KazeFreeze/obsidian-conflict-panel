@@ -1,4 +1,5 @@
-import { ItemView, Notice, WorkspaceLeaf } from "obsidian";
+import { ItemView, WorkspaceLeaf } from "obsidian";
+import { notifyError, notifySuccess, notifyWarning } from "./notify";
 import { isSafeVaultPath } from "./core/safe-path";
 import { DestinationOccupied, UnsafePath, VaultOps } from "./vault-ops";
 
@@ -105,15 +106,15 @@ export class ConflictRecoveryView extends ItemView {
 			// so there is no existing file at that path for an editor to have open.
 			const content = await this.app.vault.adapter.read(artifact.path);
 			await this.ops().createNew(artifact.sourcePath, content);
-			new Notice(`Copied back to ${artifact.sourcePath}. The archive is still in recovery.`);
+			notifySuccess("Copied back", `${artifact.sourcePath}. The archive stays in recovery.`);
 			await this.render();
 		} catch (error) {
 			if (error instanceof DestinationOccupied) {
-				new Notice(`${artifact.sourcePath} already exists. Nothing was written.`);
+				notifyWarning("Refused", `${artifact.sourcePath} already exists. Nothing was written.`);
 			} else if (error instanceof UnsafePath) {
-				new Notice(error.message);
+				notifyWarning("Refused", error.message);
 			} else {
-				new Notice(`Could not restore: ${String(error)}`);
+				notifyError("Failed", String(error));
 			}
 		}
 	}

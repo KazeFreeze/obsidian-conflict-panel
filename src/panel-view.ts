@@ -1,5 +1,6 @@
-import { ItemView, WorkspaceLeaf } from "obsidian";
+import { ItemView, setIcon, WorkspaceLeaf } from "obsidian";
 import { describeGroup } from "./core/entry-view";
+import { SHAPE_ICON } from "./core/notify-model";
 import type { ConflictGroup } from "./core/types";
 
 export const CONFLICT_PANEL_VIEW = "conflict-panel-list";
@@ -62,7 +63,14 @@ export class ConflictPanelView extends ItemView {
 			const view = describeGroup(group);
 			const item = list.createEl("li", { cls: "conflict-panel__item" });
 			const button = item.createEl("button", { cls: "conflict-panel__entry" });
-			button.createSpan({ text: group.originalPath, cls: "conflict-panel__path" });
+			// Word-first, icon second: the path is the thing being scanned for, and
+			// the icon only distinguishes the shape at a glance. Never icon-only.
+			const head = button.createDiv({ cls: "conflict-panel__head" });
+			setIcon(
+				head.createSpan({ cls: `conflict-panel__icon is-${group.shape}` }),
+				SHAPE_ICON[group.shape] ?? "file",
+			);
+			head.createSpan({ text: group.originalPath, cls: "conflict-panel__path" });
 			button.createSpan({
 				text: group.copies.length === 1 ? "1 copy" : `${group.copies.length} copies`,
 				cls: "conflict-panel__meta",
