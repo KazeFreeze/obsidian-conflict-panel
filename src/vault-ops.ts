@@ -14,6 +14,13 @@ export class DestinationOccupied extends Error {
 	}
 }
 
+/** Thrown before an adapter call when an encoded archive basename is too long. */
+export class ArchiveNameTooLong extends Error {
+	constructor(path: string, bytes: number) {
+		super(`The recovery name for ${path} is ${bytes} UTF-8 bytes; the limit is 255.`);
+	}
+}
+
 export type RecoveryMoveResult =
 	| { copy: TFile; status: "moved"; recoveryPath: string }
 	| { copy: TFile; status: "failed"; error: unknown };
@@ -53,6 +60,8 @@ export class VaultOps {
 	async moveToRecovery(copy: TFile): Promise<string> {
 		await this.ensureFolder(this.recoveryFolder);
 		const target = await this.freePath(this.recoveryPathFor(copy.path));
+		const targetFolder = target.slice(0, target.lastIndexOf("/"));
+		if (targetFolder !== this.recoveryFolder) await this.ensureFolder(targetFolder);
 		await this.app.vault.rename(copy, target);
 		return target;
 	}
@@ -93,17 +102,19 @@ export class VaultOps {
 		// path from this name. Escape the escape character first: a naive `/`->`__`
 		// makes `a__b/note.md` and `a/b__note.md` collide.
 		const flat = sourcePath.replace(/%/g, "%25").replace(/\//g, "%2F");
-		return `${this.recoveryFolder}/${flat}.conflictbak`;
+		const archiveName = `${flat}.conflictbak`;
+		const bytes = new TextEncoder().encode(archiveName).byteLength;
+		if (bytes > 255) throw new ArchiveNameTooLong(sourcePath, bytes);
+		return `${this.recoveryFolder}/${archiveName}`;
 	}
 
-	/** Inverse of every path freePath can produce, including collision markers. */
+	/** Inverse of every path freePath can produce, including collision folders. */
 	static sourcePathFromRecovery(recoveryName: string): string {
 		const slash = recoveryName.lastIndexOf("/");
 		const archiveName = recoveryName.slice(slash + 1);
 		// Order matters: remove framing first, then reverse source-path escaping.
 		const withoutExtension = archiveName.replace(/\.conflictbak$/, "");
-		const withoutMarker = withoutExtension.replace(/%00\d+$/, "");
-		return withoutMarker
+		return withoutExtension
 			.replace(/%2F/g, "/")
 			.replace(/%25/g, "%");
 	}
@@ -119,11 +130,13 @@ export class VaultOps {
 	 */
 	private async freePath(base: string): Promise<string> {
 		if (!(await this.app.vault.adapter.exists(base))) return base;
-		const stem = base.replace(/\.conflictbak$/, "");
+		const slash = base.lastIndexOf("/");
+		const parent = base.slice(0, slash);
+		const archiveName = base.slice(slash + 1);
 		for (let n = 2; n < 1000; n++) {
-			// Literal `%` is already `%25`, so raw `%00` is an unambiguous,
-			// variable-width collision marker that restore can remove exactly.
-			const candidate = `${stem}%00${n}.conflictbak`;
+			// Keep collision counters out of the basename so collisions cannot push
+			// an otherwise valid 255-byte archive name over the component limit.
+			const candidate = `${parent}/${n}/${archiveName}`;
 			if (!(await this.app.vault.adapter.exists(candidate))) return candidate;
 		}
 		throw new DestinationOccupied(base);

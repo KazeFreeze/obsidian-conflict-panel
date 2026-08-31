@@ -193,7 +193,16 @@ other**, and six adversarial audits missed it. It was caught during implementati
 
 The encoding is percent-style: `%` becomes `%25` first, then `/` becomes `%2F`. Escaping the escape
 character first is what makes it unambiguous — a naive `/` → `__` flattening collides, since
-`a__b/note.md` and `a/b__note.md` produce the same string. Restore decodes in reverse.
+`a__b/note.md` and `a/b__note.md` produce the same string. Restore decodes in reverse. The encoded
+archive basename is measured with `TextEncoder` and rejected with a dedicated error above 255 UTF-8
+bytes, before any adapter rename is attempted.
+
+The first archive uses `Conflict Recovery/<encoded>.conflictbak`. Collisions keep that basename
+unchanged and move the counter into a subfolder: `Conflict Recovery/2/<encoded>.conflictbak`, then
+`Conflict Recovery/3/...`, and so on. This avoids both ambiguous filename markers and a collision
+suffix pushing an otherwise valid basename over the filesystem component limit. Restore decodes
+only the final basename, so collision 10 cannot alias collision 1 and literal `%` or `%00` in the
+source path round-trip unchanged.
 
 Parent folders are created explicitly; neither `vault.create` nor `vault.rename` creates them.
 

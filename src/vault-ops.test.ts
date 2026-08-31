@@ -1,6 +1,6 @@
 import type { App, TFile } from "obsidian";
 import { describe, expect, it, vi } from "vitest";
-import { StaleInput, VaultOps } from "./vault-ops";
+import { ArchiveNameTooLong, StaleInput, VaultOps } from "./vault-ops";
 
 const file = (path: string): TFile => ({ path }) as TFile;
 
@@ -9,16 +9,15 @@ const file = (path: string): TFile => ({ path }) as TFile;
 // or races against a real Obsidian adapter.
 
 async function archiveAtCollision(sourcePath: string, collisionNumber: number): Promise<string> {
-	let candidateChecks = 0;
+	const encoded = `${sourcePath.replace(/%/g, "%25").replace(/\//g, "%2F")}.conflictbak`;
+	const occupied = new Set(["Recovery"]);
+	if (collisionNumber > 1) occupied.add(`Recovery/${encoded}`);
+	for (let n = 2; n < collisionNumber; n++) occupied.add(`Recovery/${n}/${encoded}`);
 	const rename = vi.fn(async (_copy: TFile, target: string) => target);
 	const app = {
 		vault: {
 			adapter: {
-				exists: vi.fn(async (path: string) => {
-					if (path === "Recovery") return true;
-					candidateChecks++;
-					return candidateChecks < collisionNumber;
-				}),
+				exists: vi.fn(async (path: string) => occupied.has(path)),
 				mkdir: vi.fn(async () => undefined),
 			},
 			rename,
@@ -32,16 +31,43 @@ async function archiveAtCollision(sourcePath: string, collisionNumber: number): 
 
 describe("VaultOps recovery path encoding", () => {
 	it.each([
-		{ source: "a/b/note.md", collision: 1, marker: null },
-		{ source: "a/b/note.md", collision: 2, marker: "%002" },
-		{ source: "a/b/note.md", collision: 10, marker: "%0010" },
-		{ source: "a/%/note.md", collision: 1, marker: null },
-		{ source: "a/%00/note.md", collision: 2, marker: "%002" },
-	])("round-trips $source at collision $collision", async ({ source, collision, marker }) => {
+		{ source: "a/b/note.md", collision: 1 },
+		{ source: "a/b/note.md", collision: 2 },
+		{ source: "a/b/note.md", collision: 10 },
+		{ source: "a/%/note.md", collision: 1 },
+		{ source: "a/%00/note.md", collision: 2 },
+	])("round-trips $source at collision $collision", async ({ source, collision }) => {
 		const recoveryPath = await archiveAtCollision(source, collision);
 
-		if (marker) expect(recoveryPath).toContain(`${marker}.conflictbak`);
+		if (collision > 1) expect(recoveryPath.startsWith(`Recovery/${collision}/`)).toBe(true);
 		expect(VaultOps.sourcePathFromRecovery(recoveryPath)).toBe(source);
+	});
+
+	it("keeps a 252-byte archive basename unchanged at the second collision", async () => {
+		const source = `${"a/".repeat(58)}xnote.md`;
+		const recoveryPath = await archiveAtCollision(source, 2);
+		const archiveName = recoveryPath.slice(recoveryPath.lastIndexOf("/") + 1);
+
+		expect(new TextEncoder().encode(archiveName)).toHaveLength(252);
+		expect(recoveryPath.startsWith("Recovery/2/")).toBe(true);
+	});
+
+	it.each([
+		["ASCII", "x".repeat(244)],
+		["multi-byte", `${"😀".repeat(62)}.md`],
+	])("rejects an overlong %s archive name before rename", async (_kind, source) => {
+		const rename = vi.fn(async () => undefined);
+		const app = {
+			vault: {
+				adapter: { exists: vi.fn(async () => false), mkdir: vi.fn(async () => undefined) },
+				rename,
+			},
+		} as unknown as App;
+
+		await expect(new VaultOps(app, "Recovery").moveToRecovery(file(source))).rejects.toBeInstanceOf(
+			ArchiveNameTooLong,
+		);
+		expect(rename).not.toHaveBeenCalled();
 	});
 });
 
