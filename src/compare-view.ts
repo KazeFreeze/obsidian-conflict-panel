@@ -228,11 +228,19 @@ export class ConflictCompareView extends ItemView {
 	private async archiveAll(files: TFile[]): Promise<void> {
 		const results = await this.ops().moveAllToRecovery(files);
 		const failed = results.filter((result) => result.status === "failed").length;
+		const expected = this.group?.copies.length ?? files.length;
+		const disappeared = Math.max(0, expected - files.length);
+		const missingNotice = this.disappearedNotice(disappeared);
 		new Notice(
 			failed === 0
-				? `Moved ${results.length} to recovery.`
-				: `Moved ${results.length - failed}, ${failed} failed. Nothing was deleted.`,
+				? `Moved ${results.length} to recovery.${missingNotice}`
+				: `Moved ${results.length - failed}, ${failed} failed. Nothing was deleted.${missingNotice}`,
 		);
+	}
+
+	private disappearedNotice(count: number): string {
+		if (count === 0) return "";
+		return ` ${count} scanned ${count === 1 ? "copy was" : "copies were"} no longer present and could not be moved.`;
 	}
 
 	private async dispatch(action: EntryAction): Promise<boolean> {
@@ -269,10 +277,12 @@ export class ConflictCompareView extends ItemView {
 			const remainingFailed = results.filter((result) => result.status === "failed").length;
 			const failed = remainingFailed + (selectedArchiveFailed ? 1 : 0);
 			const moved = results.length - remainingFailed + (selectedArchiveFailed ? 0 : 1);
+			const disappeared = Math.max(0, group.copies.length - 1 - remaining.length);
+			const missingNotice = this.disappearedNotice(disappeared);
 			new Notice(
 				failed === 0
-					? `Restored ${group.originalPath}. Moved ${moved} to recovery.`
-					: `Restored ${group.originalPath}. Moved ${moved} to recovery; ${failed} could not be moved. Nothing was deleted.`,
+					? `Restored ${group.originalPath}. Moved ${moved} to recovery.${missingNotice}`
+					: `Restored ${group.originalPath}. Moved ${moved} to recovery; ${failed} could not be moved. Nothing was deleted.${missingNotice}`,
 			);
 			return true;
 		}

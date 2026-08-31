@@ -983,11 +983,19 @@ preserved in recovery rather than left behind to be rediscovered.
 	private async archiveAll(files: TFile[]): Promise<void> {
 		const results = await this.ops().moveAllToRecovery(files);
 		const failed = results.filter((r) => r.status === "failed").length;
+		const expected = this.group?.copies.length ?? files.length;
+		const disappeared = Math.max(0, expected - files.length);
+		const missingNotice = this.disappearedNotice(disappeared);
 		new Notice(
 			failed === 0
-				? `Moved ${results.length} to recovery.`
-				: `Moved ${results.length - failed}, ${failed} failed. Nothing was deleted.`,
+				? `Moved ${results.length} to recovery.${missingNotice}`
+				: `Moved ${results.length - failed}, ${failed} failed. Nothing was deleted.${missingNotice}`,
 		);
+	}
+
+	private disappearedNotice(count: number): string {
+		if (count === 0) return "";
+		return ` ${count} scanned ${count === 1 ? "copy was" : "copies were"} no longer present and could not be moved.`;
 	}
 
 	/** Returns whether the group is resolved and the tab should close. */
@@ -1029,10 +1037,12 @@ preserved in recovery rather than left behind to be rediscovered.
 			const restFailed = results.filter((result) => result.status === "failed").length;
 			const failed = restFailed + (selectedArchiveFailed ? 1 : 0);
 			const moved = results.length - restFailed + (selectedArchiveFailed ? 0 : 1);
+			const disappeared = Math.max(0, group.copies.length - 1 - rest.length);
+			const missingNotice = this.disappearedNotice(disappeared);
 			new Notice(
 				failed === 0
-					? `Restored ${group.originalPath}. Moved ${moved} to recovery.`
-					: `Restored ${group.originalPath}. Moved ${moved} to recovery; ${failed} could not be moved. Nothing was deleted.`,
+					? `Restored ${group.originalPath}. Moved ${moved} to recovery.${missingNotice}`
+					: `Restored ${group.originalPath}. Moved ${moved} to recovery; ${failed} could not be moved. Nothing was deleted.${missingNotice}`,
 			);
 			return true;
 		}
