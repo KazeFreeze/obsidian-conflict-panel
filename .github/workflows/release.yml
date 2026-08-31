@@ -21,9 +21,10 @@ jobs:
                   node-version: 24
                   cache: 'npm'
 
-            - name: Build plugin
+            - name: Build and test plugin
               run: |
                   npm ci
+                  npm test
                   npm run build
 
             - name: Check for optional styles
@@ -44,7 +45,13 @@ jobs:
               run: |
                   tag="${GITHUB_REF#refs/tags/}"
 
+                  # NOT a draft. BRAT installs from the latest PUBLISHED release and
+                  # cannot see a draft at all, so a drafted release ships to nobody.
+                  #
+                  # versions.json is attached too: it maps each plugin version to the
+                  # minimum Obsidian it needs, and is how a device on an older build
+                  # is offered the last compatible version instead of a broken one.
                   gh release create "$tag" \
                     --title="$tag" \
-                    --draft \
-                    main.js manifest.json ${{ steps.styles.outputs.exists == 'true' && 'styles.css' || '' }}
+                    --generate-notes \
+                    main.js manifest.json versions.json ${{ steps.styles.outputs.exists == 'true' && 'styles.css' || '' }}
