@@ -5,6 +5,14 @@ import { DestinationOccupied, UnsafePath, VaultOps } from "./vault-ops";
 
 export const CONFLICT_RECOVERY_VIEW = "conflict-panel-recovery";
 
+/** Rounding a few hundred bytes to "0 KB" reads as "nothing here" when the
+ *  folder is the only copy of the user's losing versions. */
+function formatBytes(total: number): string {
+	if (total < 1024) return `${total} bytes`;
+	if (total < 1024 * 1024) return `${Math.round(total / 1024)} KB`;
+	return `${(total / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 interface Artifact {
 	path: string;
 	sourcePath: string;
@@ -71,7 +79,7 @@ export class ConflictRecoveryView extends ItemView {
 
 		const total = artifacts.reduce((bytes, artifact) => bytes + artifact.bytes, 0);
 		root.createEl("h4", {
-			text: `${artifacts.length} recovered ${artifacts.length === 1 ? "file" : "files"}, ${Math.round(total / 1024)} KB`,
+			text: `${artifacts.length} recovered ${artifacts.length === 1 ? "file" : "files"}, ${formatBytes(total)}`,
 		});
 		root.createEl("p", {
 			text: "Nothing here is ever deleted automatically. Restoring copies a file back; the archive stays until you remove it yourself.",
