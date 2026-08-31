@@ -1072,10 +1072,13 @@ export class VaultOps {
 
 - [ ] **Step 4: Add behavioural tests in `src/vault-ops.test.ts`**
 
-Use a fake `App`/adapter to cover the stale equality precondition, collision folders 1, 2, and 10,
-literal `%` and `%00` round trips, the 255 UTF-8-byte basename limit, occupied restoration, nested
-parent creation, and `moveAllToRecovery` continuing after one copy fails. State beside the fakes
-that they establish control flow only: they cannot prove rename
+Use an in-memory fake `App`/adapter that tracks path → content state. Cover the stale equality
+precondition, collision folders 1, 2, and 10, literal `%` and `%00` round trips, the 255 UTF-8-byte
+basename limit, successful and occupied restoration, nested parent creation, and
+`moveAllToRecovery` continuing after one copy fails. Every case must assert which exact path holds
+which content afterward—not only calls or fabricated status values—and stale replacement must prove
+`vault.process` was invoked. State beside the fake that it establishes observable state and control
+flow only: it cannot prove rename
 atomicity, cache invalidation, editor behaviour, process death, or real-adapter races.
 
 - [ ] **Step 5: Run the full suite**

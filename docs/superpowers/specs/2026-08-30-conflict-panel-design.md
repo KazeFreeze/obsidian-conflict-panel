@@ -345,7 +345,8 @@ requires 1.1.0, and no trash API is used at all.
 ## Testing
 
 Vitest over every `core/` module, named cases per invariant, including recursive copy-of-copy
-grouping and nested recovery-folder filenames.
+grouping. Vault-operation tests use an in-memory path → content model and assert the exact content at
+the original, copy, and recovery paths after success and failure; call counts alone are insufficient.
 
 **Stated limitation:** a fake adapter cannot prove rename atomicity, cache invalidation, editor
 behaviour, Android process death, or two devices resolving at once. Those need fault injection and a
