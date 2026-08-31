@@ -254,9 +254,12 @@ paired.
 **Re-detection is prevented by folder exclusion, not by the extension.** The recovery-folder setting
 is normalized once when loaded or changed: Obsidian's `normalizePath` handles its actual separator,
 surrounding-slash, whitespace, and Unicode behavior, then the plugin explicitly removes empty and
-`.` path segments. The resulting canonical value is passed unchanged to grouping, folder creation,
-and archive naming. This handles leading or repeated separators, `.` segments, and backslashes
-without assuming undocumented behavior from Obsidian or letting three implementations disagree.
+`.` path segments and resolves `..` against preceding segments. A `..` that would escape the vault
+root rejects the entire setting to the default rather than silently clamping it; a path that resolves
+to the vault root also falls back to the default. The resulting canonical value is passed unchanged
+to grouping, folder creation, and archive naming. This handles leading or repeated separators, dot
+segments, and backslashes without assuming undocumented behavior from Obsidian, allowing an Adapter
+path outside the vault, or letting three implementations disagree.
 `core/group.ts` rejects that recovery root outright. The non-note extension is defence in depth: an
 ordinary note can legitimately contain a valid-looking `.sync-conflict-*` sequence, especially with
 multiple extensions, so filename rules alone are insufficient. A Syncthing conflict *of an archived

@@ -109,11 +109,18 @@ export const DEFAULT_SETTINGS: ConflictPanelSettings = {
 
 /** Canonicalize once where settings enter the application. */
 export function normalizeRecoveryFolder(value: string): string {
-	const canonical = normalizePath(value.trim())
-		.split("/")
-		.filter((segment) => segment && segment !== ".")
-		.join("/");
-	return canonical || DEFAULT_SETTINGS.recoveryFolder;
+	const segments: string[] = [];
+	for (const segment of normalizePath(value.trim()).split("/")) {
+		if (!segment || segment === ".") continue;
+		if (segment === "..") {
+			// Reject the whole setting instead of clamping an attempted vault escape.
+			if (segments.length === 0) return DEFAULT_SETTINGS.recoveryFolder;
+			segments.pop();
+		} else {
+			segments.push(segment);
+		}
+	}
+	return segments.join("/") || DEFAULT_SETTINGS.recoveryFolder;
 }
 
 export class ConflictPanelSettingTab extends PluginSettingTab {
@@ -191,6 +198,10 @@ canonicalized, while plugin-owned processing handles `Archive/./Conflicts`, `./C
 `Conflicts/.`, `a/./b/./c`, and a value made entirely of dot/empty segments. The last case falls
 back to the default. Core grouping receives only this canonical value and must not implement a
 second normalizer.
+
+Also cover `../Recovery`, `a/../b`, `a/../../etc`, `..`, and `Conflicts/..`. Resolve `..` by popping
+a preceding segment; if it would pop above the vault root, reject the entire setting to the default
+rather than clamping it. A value that resolves to the root also falls back to the default.
 
 - [ ] **Step 6: Replace `README.md`**
 

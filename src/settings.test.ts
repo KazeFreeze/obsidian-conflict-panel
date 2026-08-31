@@ -33,6 +33,11 @@ describe("normalizeRecoveryFolder", () => {
 		["Conflicts/.", "Conflicts"],
 		["a/./b/./c", "a/b/c"],
 		["Archive\\Conflicts", "Archive/Conflicts"],
+		["a/../b", "b"],
+		["../Recovery", "Conflict Recovery"],
+		["a/../../etc", "Conflict Recovery"],
+		["..", "Conflict Recovery"],
+		["Conflicts/..", "Conflict Recovery"],
 	])("normalizes %j with Obsidian at the settings boundary", (input, expected) => {
 		expect(normalizeRecoveryFolder(input)).toBe(expected);
 		expect(normalizePath).toHaveBeenCalledWith(input.trim());
