@@ -101,7 +101,9 @@ export class VaultOps {
 		// create() remains the sole no-clobber safety guard. If the path is empty
 		// now but occupied before create runs, create throws and nothing is clobbered.
 		const existing = this.app.vault.getAbstractFileByPath(originalPath);
-		if (existing instanceof TFile) throw new DestinationOccupied(originalPath);
+		// Any occupant aborts, file or folder alike. Round three tried to treat an
+		// identical-content file as proof of its own earlier create; byte equality
+		// cannot establish that, so every occupied destination now aborts cleanly.
 		if (existing) throw new DestinationOccupied(originalPath);
 		// Obsidian exposes no typed create error. An occupancy race, permissions,
 		// and an invalid path therefore remain distinct only as their raw causes.
