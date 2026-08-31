@@ -731,6 +731,8 @@ export class ConflictCompareView extends ItemView {
 	/** null means "not computed yet", which is distinct from an empty hunk list. */
 	private diff: DiffResult | null = null;
 	private awaitingConfirmation = false;
+	/** True while the selected copy and original are not yet a reviewable pair. */
+	private loading = false;
 	private busy = false;
 	/** Bumped on every selection change so a slow read cannot land after a fast one. */
 	private loadToken = 0;
@@ -770,6 +772,7 @@ export class ConflictCompareView extends ItemView {
 		// and "Keep this copy" would then write the wrong content. Nothing is assigned
 		// to a field until the token proves this read is still the current one.
 		const token = ++this.loadToken;
+		this.loading = true;
 		const copy = this.copyFile();
 		const original = this.originalFile();
 		const copyText = copy ? await this.app.vault.read(copy) : null;
@@ -780,6 +783,7 @@ export class ConflictCompareView extends ItemView {
 		this.reviewedOriginal = originalText;
 		this.diff = null;
 		this.awaitingConfirmation = false;
+		this.loading = false;
 
 		if (originalText === null || copyText === null) return;
 		if (needsConfirmation(originalText, copyText)) this.awaitingConfirmation = true;
@@ -841,6 +845,15 @@ export class ConflictCompareView extends ItemView {
 			button.addEventListener("click", () => {
 				if (this.busy) return; // a write is in flight against the current selection
 				this.selectedCopy = i;
+				// Invalidate the old selection synchronously. loadToken prevents stale reads
+				// from publishing; these nulls prevent stale text from being actionable while
+				// the current read is still in flight.
+				this.reviewedOriginal = null;
+				this.reviewedCopy = null;
+				this.diff = null;
+				this.awaitingConfirmation = false;
+				this.loading = true;
+				this.render();
 				void this.loadSelection().then(() => this.render());
 			});
 		});
@@ -898,6 +911,7 @@ preserved in recovery rather than left behind to be rediscovered.
 		for (const action of actions) {
 			// Visible text, never an icon or a tooltip alone: this must work on touch.
 			const button = bar.createEl("button", { text: label[action] });
+			button.disabled = this.loading;
 			button.addEventListener("click", () => void this.run(action));
 		}
 	}
@@ -905,7 +919,12 @@ preserved in recovery rather than left behind to be rediscovered.
 	/** Single entry point into VaultOps. Guards, dispatches, reports. */
 	private async run(action: EntryAction): Promise<void> {
 		const group = this.group;
-		if (!group || this.busy) return;
+		if (!group) return;
+		if (this.loading) {
+			new Notice("Wait for the selected copy to finish loading.");
+			return;
+		}
+		if (this.busy) return;
 
 		const blocked = blockingPaths(group, openPathsIn(this.app.workspace));
 		if (blocked.length > 0) {

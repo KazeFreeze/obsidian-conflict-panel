@@ -20,6 +20,7 @@ export class ConflictCompareView extends ItemView {
 	private reviewedCopy: string | null = null;
 	private diff: DiffResult | null = null;
 	private awaitingConfirmation = false;
+	private loading = false;
 	private busy = false;
 	private loadToken = 0;
 
@@ -53,6 +54,7 @@ export class ConflictCompareView extends ItemView {
 	/** Read into locals; only the latest selection token may publish state. */
 	private async loadSelection(): Promise<void> {
 		const token = ++this.loadToken;
+		this.loading = true;
 		const copy = this.copyFile();
 		const original = this.originalFile();
 		const copyText = copy ? await this.app.vault.read(copy) : null;
@@ -63,6 +65,7 @@ export class ConflictCompareView extends ItemView {
 		this.reviewedOriginal = originalText;
 		this.diff = null;
 		this.awaitingConfirmation = false;
+		this.loading = false;
 		if (originalText === null || copyText === null) return;
 		if (needsConfirmation(originalText, copyText)) this.awaitingConfirmation = true;
 		else this.diff = toHunks(originalText, copyText);
@@ -122,6 +125,14 @@ export class ConflictCompareView extends ItemView {
 			button.addEventListener("click", () => {
 				if (this.busy) return;
 				this.selectedCopy = index;
+				// Invalidate the old selection synchronously. Until the new reads land,
+				// no action may pair this selection with the previous copy's text.
+				this.reviewedOriginal = null;
+				this.reviewedCopy = null;
+				this.diff = null;
+				this.awaitingConfirmation = false;
+				this.loading = true;
+				this.render();
 				void this.loadSelection().then(() => this.render());
 			});
 		});
@@ -174,15 +185,20 @@ export class ConflictCompareView extends ItemView {
 			"accept-deletion": "Move copies to recovery",
 		};
 		for (const action of actions) {
-			bar.createEl("button", { text: labels[action] }).addEventListener("click", () =>
-				void this.run(action),
-			);
+			const button = bar.createEl("button", { text: labels[action] });
+			button.disabled = this.loading;
+			button.addEventListener("click", () => void this.run(action));
 		}
 	}
 
 	private async run(action: EntryAction): Promise<void> {
 		const group = this.group;
-		if (!group || this.busy) return;
+		if (!group) return;
+		if (this.loading) {
+			new Notice("Wait for the selected copy to finish loading.");
+			return;
+		}
+		if (this.busy) return;
 		const blocked = blockingPaths(group, openPathsIn(this.app.workspace));
 		if (blocked.length > 0) {
 			new Notice(
