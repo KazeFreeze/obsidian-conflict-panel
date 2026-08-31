@@ -487,6 +487,12 @@ Run: `npm test -- vault-ops`
 
 - [ ] **Step 8: Implement `createNew`**
 
+Import the pure guard at the top of `src/vault-ops.ts`:
+
+```ts
+import { isSafeVaultPath } from "./core/safe-path";
+```
+
 ```ts
 export class UnsafePath extends Error {
 	constructor(readonly path: string) {

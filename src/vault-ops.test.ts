@@ -5,6 +5,7 @@ import {
 	DestinationOccupied,
 	RestoreArchiveFailed,
 	StaleInput,
+	UnsafePath,
 	VaultOps,
 } from "./vault-ops";
 
@@ -109,6 +110,66 @@ describe("VaultOps error types", () => {
 
 		expect(archival).not.toBeInstanceOf(DestinationOccupied);
 		expect(occupied).not.toBeInstanceOf(RestoreArchiveFailed);
+	});
+});
+
+describe("createNew", () => {
+	it("writes the exact content at an empty path", async () => {
+		const vault = new FakeVault();
+
+		await new VaultOps(vault.asApp(), "Recovery").createNew("note.md", "new content");
+
+		expect(vault.files.get("note.md")).toBe("new content");
+	});
+
+	it("throws DestinationOccupied when a file already holds the path", async () => {
+		const vault = new FakeVault([["note.md", "existing"]]);
+
+		await expect(
+			new VaultOps(vault.asApp(), "Recovery").createNew("note.md", "replacement"),
+		).rejects.toBeInstanceOf(DestinationOccupied);
+	});
+
+	it("throws DestinationOccupied when a folder holds the path", async () => {
+		const vault = new FakeVault();
+		vault.folders.add("note.md");
+
+		await expect(
+			new VaultOps(vault.asApp(), "Recovery").createNew("note.md", "content"),
+		).rejects.toBeInstanceOf(DestinationOccupied);
+		expect(vault.folders.has("note.md")).toBe(true);
+	});
+
+	it("leaves an existing file byte-identical when it refuses", async () => {
+		const vault = new FakeVault([["note.md", "original bytes"]]);
+
+		await expect(
+			new VaultOps(vault.asApp(), "Recovery").createNew("note.md", "different bytes"),
+		).rejects.toBeInstanceOf(DestinationOccupied);
+		expect(vault.files.get("note.md")).toBe("original bytes");
+	});
+
+	it("throws UnsafePath before touching the vault", async () => {
+		const vault = new FakeVault();
+
+		await expect(
+			new VaultOps(vault.asApp(), "Recovery").createNew("../outside.md", "x"),
+		).rejects.toBeInstanceOf(UnsafePath);
+		expect(vault.getAbstractFileByPath).not.toHaveBeenCalled();
+		expect(vault.create).not.toHaveBeenCalled();
+	});
+
+	it("writes nothing anywhere when the path is unsafe", async () => {
+		const vault = new FakeVault([["sentinel.md", "untouched"]]);
+		vault.folders.add("Folder");
+		const filesBefore = [...vault.files];
+		const foldersBefore = [...vault.folders];
+
+		await expect(
+			new VaultOps(vault.asApp(), "Recovery").createNew("a/../../outside.md", "x"),
+		).rejects.toBeInstanceOf(UnsafePath);
+		expect([...vault.files]).toEqual(filesBefore);
+		expect([...vault.folders]).toEqual(foldersBefore);
 	});
 });
 

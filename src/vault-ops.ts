@@ -1,4 +1,5 @@
 import { TFile, type App } from "obsidian";
+import { isSafeVaultPath } from "./core/safe-path";
 
 /** Thrown when the file changed between review and write. Aborts cleanly. */
 export class StaleInput extends Error {
@@ -18,6 +19,13 @@ export class DestinationOccupied extends Error {
 export class ArchiveNameTooLong extends Error {
 	constructor(path: string, bytes: number) {
 		super(`The recovery name for ${path} is ${bytes} UTF-8 bytes; the limit is 255.`);
+	}
+}
+
+/** Thrown before any vault access when a write target is not vault-relative. */
+export class UnsafePath extends Error {
+	constructor(readonly path: string) {
+		super(`${path} is not a path inside this vault. Nothing was written.`);
 	}
 }
 
@@ -60,6 +68,18 @@ export class VaultOps {
 			if (current !== reviewedText) throw new StaleInput(original.path);
 			return chosenText;
 		});
+	}
+
+	/**
+	 * Create a file at a safe path that must be empty.
+	 *
+	 * The lookup only recognises occupancy; create remains the sole no-clobber
+	 * guard if the path becomes occupied after that lookup.
+	 */
+	async createNew(path: string, content: string): Promise<void> {
+		if (!isSafeVaultPath(path)) throw new UnsafePath(path);
+		if (this.app.vault.getAbstractFileByPath(path)) throw new DestinationOccupied(path);
+		await this.app.vault.create(path, content);
 	}
 
 	/**
