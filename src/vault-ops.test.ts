@@ -1,6 +1,12 @@
 import type { App, TFile } from "obsidian";
 import { describe, expect, it, vi } from "vitest";
-import { ArchiveNameTooLong, DestinationOccupied, StaleInput, VaultOps } from "./vault-ops";
+import {
+	ArchiveNameTooLong,
+	DestinationOccupied,
+	RestoreArchiveFailed,
+	StaleInput,
+	VaultOps,
+} from "./vault-ops";
 
 const { MockTFile } = vi.hoisted(() => ({
 	MockTFile: class {
@@ -188,25 +194,67 @@ describe("VaultOps restore", () => {
 		expect(vault.files.has("original.md")).toBe(false);
 	});
 
-	it("retries only archival when a prior restore already created identical content", async () => {
+	it("reports archival failure after create and rejects a retry as occupied", async () => {
 		const vault = new FakeVault([["copy.md", "copy contents"]]);
 		const archiveFailure = new Error("archive unavailable");
 		vault.renameFailures.set("copy.md", archiveFailure);
 		const ops = new VaultOps(vault.asApp(), "Recovery");
 
-		await expect(ops.restoreTo(file("copy.md"), "original.md")).rejects.toBe(archiveFailure);
+		let error: unknown;
+		try {
+			await ops.restoreTo(file("copy.md"), "original.md");
+		} catch (cause) {
+			error = cause;
+		}
+		expect(error).toBeInstanceOf(RestoreArchiveFailed);
+		if (!(error instanceof RestoreArchiveFailed)) throw new Error("Expected RestoreArchiveFailed");
+		expect(error).toMatchObject({
+			originalPath: "original.md",
+			copyPath: "copy.md",
+			cause: archiveFailure,
+		});
+		expect(error.message).toBe(
+			"Restored original.md successfully. The conflict copy copy.md could not be moved to recovery, so both files are still present and nothing was lost. Move or delete the copy yourself when convenient.",
+		);
 		expect(vault.files.get("original.md")).toBe("copy contents");
 		expect(vault.files.get("copy.md")).toBe("copy contents");
 		expect(vault.files.has("Recovery/copy.md.conflictbak")).toBe(false);
 		expect(vault.create).toHaveBeenCalledTimes(1);
 
 		vault.renameFailures.delete("copy.md");
-		await ops.restoreTo(file("copy.md"), "original.md");
+		await expect(ops.restoreTo(file("copy.md"), "original.md")).rejects.toBeInstanceOf(
+			DestinationOccupied,
+		);
 
 		expect(vault.create).toHaveBeenCalledTimes(1);
 		expect(vault.files.get("original.md")).toBe("copy contents");
-		expect(vault.files.get("Recovery/copy.md.conflictbak")).toBe("copy contents");
-		expect(vault.files.has("copy.md")).toBe(false);
+		expect(vault.files.get("copy.md")).toBe("copy contents");
+		expect(vault.files.has("Recovery/copy.md.conflictbak")).toBe(false);
+	});
+
+	it("does not treat coincidentally identical occupied content as a retry", async () => {
+		const vault = new FakeVault([
+			["copy.md", "same content"],
+			["original.md", "same content"],
+		]);
+
+		await expect(
+			new VaultOps(vault.asApp(), "Recovery").restoreTo(file("copy.md"), "original.md"),
+		).rejects.toBeInstanceOf(DestinationOccupied);
+		expect(vault.files.get("copy.md")).toBe("same content");
+		expect(vault.files.get("original.md")).toBe("same content");
+		expect(vault.rename).not.toHaveBeenCalled();
+	});
+
+	it("does not allow a copy to restore onto and archive itself", async () => {
+		const vault = new FakeVault([["copy.md", "copy contents"]]);
+
+		await expect(
+			new VaultOps(vault.asApp(), "Recovery").restoreTo(file("copy.md"), "copy.md"),
+		).rejects.toBeInstanceOf(DestinationOccupied);
+		expect(vault.files.get("copy.md")).toBe("copy contents");
+		expect(vault.create).not.toHaveBeenCalled();
+		expect(vault.rename).not.toHaveBeenCalled();
 	});
 });
 

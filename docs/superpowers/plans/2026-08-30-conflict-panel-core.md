@@ -942,6 +942,19 @@ export class ArchiveNameTooLong extends Error {
 	}
 }
 
+/** Restore succeeded, but its non-destructive archival cleanup did not. */
+export class RestoreArchiveFailed extends Error {
+	constructor(
+		readonly originalPath: string,
+		readonly copyPath: string,
+		readonly cause: unknown,
+	) {
+		super(
+			`Restored ${originalPath} successfully. The conflict copy ${copyPath} could not be moved to recovery, so both files are still present and nothing was lost. Move or delete the copy yourself when convenient.`,
+		);
+	}
+}
+
 export type RecoveryMoveResult =
 	| { copy: TFile; status: "moved"; recoveryPath: string }
 	| { copy: TFile; status: "failed"; error: unknown };
@@ -1001,27 +1014,24 @@ export class VaultOps {
 		return results;
 	}
 
-	/** Restore without clobber, or finish archival after an identical partial restore. */
+	/** Restore without clobber; every occupied destination aborts. */
 	async restoreTo(copy: TFile, originalPath: string): Promise<void> {
 		const content = await this.app.vault.read(copy);
-		// This lookup only recognizes a retry or a destination already occupied. It
+		// This lookup only recognizes a destination already occupied. It
 		// NEVER authorizes the write and is not the old check-then-act scheme:
 		// create() remains the sole no-clobber safety guard. If the path is empty
 		// now but occupied before create runs, create throws and nothing is clobbered.
 		const existing = this.app.vault.getAbstractFileByPath(originalPath);
-		if (existing) {
-			if (!(existing instanceof TFile)) throw new DestinationOccupied(originalPath);
-			const existingContent = await this.app.vault.read(existing);
-			if (existingContent !== content) throw new DestinationOccupied(originalPath);
-			// A previous attempt completed create but failed to archive. Exact content
-			// equality makes the remaining archival step safely retryable.
-			await this.moveToRecovery(copy);
-			return;
-		}
+		if (existing instanceof TFile) throw new DestinationOccupied(originalPath);
+		if (existing) throw new DestinationOccupied(originalPath);
 		// Obsidian exposes no typed create error. An occupancy race, permissions,
 		// and an invalid path therefore remain distinct only as their raw causes.
 		await this.app.vault.create(originalPath, content);
-		await this.moveToRecovery(copy);
+		try {
+			await this.moveToRecovery(copy);
+		} catch (cause) {
+			throw new RestoreArchiveFailed(originalPath, copy.path, cause);
+		}
 	}
 
 	/**
@@ -1110,8 +1120,10 @@ Include regressions where collision bucket `2` is a regular file (the archive mu
 and where a configured recovery parent is a regular file (the copy must remain unmoved).
 For restore, assert that a known file or folder produces `DestinationOccupied`, while an ambiguous
 `vault.create` rejection is returned as the exact raw cause and leaves both paths unchanged.
-Force archival to fail after create, assert the original and copy both hold the restored content,
-then retry and prove create was not called again and only the copy was moved to its exact archive.
+Force archival to fail after create and assert `RestoreArchiveFailed` carries both paths and the raw
+cause while its message says restoration succeeded and nothing was lost. Assert the original and
+copy both hold the restored content. A retry, a coincidentally identical occupied destination, and
+`restoreTo(copy, copy.path)` must all throw `DestinationOccupied` without moving the copy.
 For every `moveAllToRecovery` result, assert the exact input `copy` object and its exact
 `recoveryPath` or exact thrown `error`, not only statuses and final vault state. After placing a new
 collision archive, re-assert the content of every older archive populated by the fixture.
