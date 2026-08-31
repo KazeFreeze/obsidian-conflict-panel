@@ -658,13 +658,25 @@ async rescan(): Promise<void> {
 async revealPanel(): Promise<void> {
 	const existing = this.app.workspace.getLeavesOfType(CONFLICT_PANEL_VIEW);
 	if (existing.length > 0) {
-		await this.app.workspace.revealLeaf(existing[0]);
+		this.app.workspace.setActiveLeaf(existing[0], { focus: true });
 		return;
 	}
 	const leaf = this.app.workspace.getRightLeaf(false);
 	if (!leaf) return;
 	await leaf.setViewState({ type: CONFLICT_PANEL_VIEW, active: true });
 	await this.rescan();
+}
+```
+
+Use `setActiveLeaf`, not `revealLeaf`: the latter requires Obsidian 1.7.2 while this plugin's
+existing `minAppVersion` is 1.1.0. The existing compatibility contract wins.
+
+Task 5 must build before Task 6 creates `ConflictCompareView`. Add this temporary staging method,
+then replace its body in Task 6:
+
+```ts
+async openCompareView(group: ConflictGroup): Promise<void> {
+	void group;
 }
 ```
 
