@@ -14,6 +14,11 @@ class FakeVault {
 
 	readonly adapter = {
 		exists: vi.fn(async (path: string) => this.files.has(path) || this.folders.has(path)),
+		stat: vi.fn(async (path: string) => {
+			if (this.files.has(path)) return { type: "file" as const, ctime: 0, mtime: 0, size: 0 };
+			if (this.folders.has(path)) return { type: "folder" as const, ctime: 0, mtime: 0, size: 0 };
+			return null;
+		}),
 		mkdir: vi.fn(async (path: string) => {
 			this.folders.add(path);
 		}),
@@ -86,6 +91,23 @@ describe("VaultOps recovery path encoding", () => {
 		const archiveName = recoveryPath.slice(recoveryPath.lastIndexOf("/") + 1);
 		expect(new TextEncoder().encode(archiveName)).toHaveLength(252);
 		expect(recoveryPath.startsWith("Recovery/2/")).toBe(true);
+	});
+
+	it("skips a collision bucket occupied by a regular file", async () => {
+		const archiveName = "note.md.conflictbak";
+		const vault = new FakeVault([
+			["note.md", "new losing version"],
+			[`Recovery/${archiveName}`, "archive 1"],
+			["Recovery/2", "ordinary file named 2"],
+		]);
+		vault.folders.add("Recovery");
+
+		const target = await new VaultOps(vault.asApp(), "Recovery").moveToRecovery(file("note.md"));
+
+		expect(target).toBe(`Recovery/3/${archiveName}`);
+		expect(vault.files.get(target)).toBe("new losing version");
+		expect(vault.files.get("Recovery/2")).toBe("ordinary file named 2");
+		expect(vault.files.get(`Recovery/${archiveName}`)).toBe("archive 1");
 	});
 
 	it.each([
@@ -186,5 +208,18 @@ describe("VaultOps recovery folder", () => {
 		expect(target).toBe("Archive/Conflicts/2026/note.md.conflictbak");
 		expect(vault.files.get(target)).toBe("note content");
 		expect(vault.files.has("note.md")).toBe(false);
+	});
+
+	it("rejects a configured parent segment that is a regular file", async () => {
+		const vault = new FakeVault([
+			["note.md", "note content"],
+			["Archive", "ordinary file"],
+		]);
+
+		await expect(
+			new VaultOps(vault.asApp(), "Archive/Conflicts").moveToRecovery(file("note.md")),
+		).rejects.toThrow("Archive already exists");
+		expect(vault.files.get("Archive")).toBe("ordinary file");
+		expect(vault.files.get("note.md")).toBe("note content");
 	});
 });

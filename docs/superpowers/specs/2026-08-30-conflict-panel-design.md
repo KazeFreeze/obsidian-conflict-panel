@@ -171,7 +171,7 @@ files that are not in the vault tree. `vault.adapter` (`list`, `read`, `readBina
 whether Obsidian loaded the file.
 
 The rest of the plugin stays Vault-managed. The Adapter is scoped to exactly one directory, which is
-also what makes the no-clobber check trustworthy: `adapter.exists()` sees an unloaded
+also what makes the destination check useful: `adapter.stat()` sees and identifies an unloaded
 `.conflictbak` that `getAbstractFileByPath()` would miss and report as free.
 
 **Restore creates, then archives.** For Markdown orphans, it reads the conflict copy, calls
@@ -202,7 +202,9 @@ unchanged and move the counter into a subfolder: `Conflict Recovery/2/<encoded>.
 `Conflict Recovery/3/...`, and so on. This avoids both ambiguous filename markers and a collision
 suffix pushing an otherwise valid basename over the filesystem component limit. Restore decodes
 only the final basename, so collision 10 cannot alias collision 1 and literal `%` or `%00` in the
-source path round-trip unchanged.
+source path round-trip unchanged. Every existing path component is checked with `adapter.stat()`:
+a regular file named `2` is not mistaken for a collision folder, so that bucket is skipped, and a
+regular file blocking any configured parent makes folder creation fail without moving the copy.
 
 Parent folders are created explicitly; neither `vault.create` nor `vault.rename` creates them.
 

@@ -1046,19 +1046,23 @@ export class VaultOps {
 	 * Uses the ADAPTER, not `getAbstractFileByPath`. Unsupported extensions may not
 	 * be loaded into Obsidian's vault tree, so the Vault API would report an
 	 * existing `.conflictbak` as absent and we would rename over it.
-	 * The exists-to-rename race remains. A concurrent archive can occupy the checked
+	 * The stat-to-rename race remains. A concurrent archive can occupy the checked
 	 * path and be overwritten, losing that previously archived losing version.
 	 */
 	private async freePath(base: string): Promise<string> {
-		if (!(await this.app.vault.adapter.exists(base))) return base;
+		if (!(await this.app.vault.adapter.stat(base))) return base;
 		const slash = base.lastIndexOf("/");
 		const parent = base.slice(0, slash);
 		const archiveName = base.slice(slash + 1);
 		for (let n = 2; n < 1000; n++) {
 			// Keep collision counters out of the basename so collisions cannot push
-			// an otherwise valid 255-byte archive name over the component limit.
-			const candidate = `${parent}/${n}/${archiveName}`;
-			if (!(await this.app.vault.adapter.exists(candidate))) return candidate;
+			// an otherwise valid 255-byte archive name over the component limit. A
+			// regular file named `n` cannot serve as a bucket, so advance past it.
+			const bucket = `${parent}/${n}`;
+			const bucketStat = await this.app.vault.adapter.stat(bucket);
+			if (bucketStat?.type === "file") continue;
+			const candidate = `${bucket}/${archiveName}`;
+			if (!(await this.app.vault.adapter.stat(candidate))) return candidate;
 		}
 		throw new DestinationOccupied(base);
 	}
@@ -1068,9 +1072,10 @@ export class VaultOps {
 		let current = "";
 		for (const segment of path.split("/").filter(Boolean)) {
 			current = current ? `${current}/${segment}` : segment;
-			if (!(await this.app.vault.adapter.exists(current))) {
+			const stat = await this.app.vault.adapter.stat(current);
+			if (!stat) {
 				await this.app.vault.adapter.mkdir(current);
-			}
+			} else if (stat.type !== "folder") throw new DestinationOccupied(current);
 		}
 	}
 }
@@ -1086,6 +1091,9 @@ which content afterward—not only calls or fabricated status values—and stale
 `vault.process` was invoked. State beside the fake that it establishes observable state and control
 flow only: it cannot prove rename
 atomicity, cache invalidation, editor behaviour, process death, or real-adapter races.
+
+Include regressions where collision bucket `2` is a regular file (the archive must advance to `3`)
+and where a configured recovery parent is a regular file (the copy must remain unmoved).
 
 - [ ] **Step 5: Run the full suite**
 
