@@ -25,6 +25,12 @@ const deferred = (path: string): Leaf => ({
 
 const fileless = (): Leaf => ({ view: {}, getViewState: () => ({ state: {} }) });
 
+/** Loaded, but the persisted state does not name the file. Both reads are needed. */
+const viewOnly = (path: string): Leaf => ({
+	view: { file: { path } },
+	getViewState: () => ({ state: {} }),
+});
+
 const workspaceOf = (leaves: Leaf[]) => ({
 	iterateAllLeaves(cb: (leaf: Leaf) => void) {
 		for (const leaf of leaves) cb(leaf);
@@ -52,6 +58,14 @@ describe("openPathsIn with deferred leaves", () => {
 
 	it("reports a path once when both sources agree", () => {
 		expect(openPathsIn(workspaceOf([loaded("note.md"), deferred("note.md")]) as never).size).toBe(1);
+	});
+
+	it("sees a loaded view whose persisted state does not name the file", () => {
+		// Kills dropping the leaf.view.file read: view state is not guaranteed to
+		// carry the path, so the guard needs BOTH sources, not just the newer one.
+		expect(openPathsIn(workspaceOf([viewOnly("note.md")]) as never)).toEqual(
+			new Set(["note.md"]),
+		);
 	});
 
 	it("ignores a leaf whose view state holds no file", () => {

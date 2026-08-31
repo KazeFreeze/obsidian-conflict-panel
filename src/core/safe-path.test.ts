@@ -17,5 +17,7 @@ describe("isSafeVaultPath", () => {
 		"..\\outside.md",
 		"\\absolute.md",
 		"",
+		"a/",
+		"Recovery/",
 	])("rejects %j", (path) => expect(isSafeVaultPath(path)).toBe(false));
 });

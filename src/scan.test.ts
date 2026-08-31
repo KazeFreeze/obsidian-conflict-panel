@@ -44,4 +44,16 @@ describe("scanConflicts", () => {
 		expect(groups[0]?.originalPath).toBe("note.md");
 		expect(groups[0]?.copies.map((entry) => entry.path)).toEqual([copy]);
 	});
+
+	it("excludes copies under the CONFIGURED recovery folder, not a hardcoded one", () => {
+		// Kills ignoring the argument: with the folder renamed, every archive inside
+		// it would be rediscovered as a fresh conflict on the next scan.
+		const archived = "My Archive/note.sync-conflict-20260830-143000-AAA.md";
+		const vault = {
+			getAllLoadedFiles: () => [new MockTFile("note.md"), new MockTFile(archived)],
+		};
+
+		expect(scanConflicts(vault as never, "My Archive")).toHaveLength(0);
+		expect(scanConflicts(vault as never, "Conflict Recovery")).not.toHaveLength(0);
+	});
 });

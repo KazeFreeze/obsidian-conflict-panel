@@ -33,10 +33,25 @@ describe("notice role", () => {
 });
 
 describe("icons", () => {
-	it("gives every kind and every shape a Lucide name", () => {
-		for (const name of Object.values(KIND_ICON)) expect(name).toMatch(/^[a-z-]+$/);
-		for (const shape of ["normal", "orphan", "opaque", "blocked"]) {
-			expect(SHAPE_ICON[shape]).toMatch(/^[a-z-]+$/);
-		}
+	it("gives each kind its own distinct icon", () => {
+		// Exact names, not a shape check: a regex happily passes a warning that
+		// renders the same neutral glyph as info, losing the very signal it carries.
+		expect(KIND_ICON).toEqual({
+			success: "check-circle",
+			info: "info",
+			warning: "alert-triangle",
+			error: "x-circle",
+		});
+		expect(new Set(Object.values(KIND_ICON)).size).toBe(4);
+	});
+
+	it("gives each conflict shape its own distinct icon", () => {
+		expect(SHAPE_ICON).toEqual({
+			normal: "git-compare",
+			orphan: "file-x",
+			opaque: "file-question",
+			blocked: "folder-x",
+		});
+		expect(new Set(Object.values(SHAPE_ICON)).size).toBe(4);
 	});
 });

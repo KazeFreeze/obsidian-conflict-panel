@@ -88,6 +88,12 @@ describe("needsConfirmation", () => {
 		expect(needsConfirmation("y", "x".repeat(94_501))).toBe(true);
 	});
 
+	it("asks when the right side is past the LINE band but short", () => {
+		// Kills a right-side check that only measures characters: 946 short lines is
+		// far under the character band and still expensive to diff.
+		expect(needsConfirmation("y", "x\n".repeat(946))).toBe(true);
+	});
+
 	it("does not ask exactly at the band", () => {
 		expect(needsConfirmation("x".repeat(94_500), "y")).toBe(false);
 	});

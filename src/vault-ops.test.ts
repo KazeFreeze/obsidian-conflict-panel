@@ -131,6 +131,14 @@ describe("createNew", () => {
 		expect(vault.files.get("note.md")).toBe(content);
 	});
 
+	it("writes an empty file as empty rather than substituting anything", async () => {
+		const vault = new FakeVault();
+
+		await new VaultOps(vault.asApp(), "Recovery").createNew("note.md", "");
+
+		expect(vault.files.get("note.md")).toBe("");
+	});
+
 	it("throws DestinationOccupied when a file already holds the path", async () => {
 		const vault = new FakeVault([["note.md", "existing"]]);
 
