@@ -119,8 +119,16 @@ for (const copy of group.copies) {
 
 **No-clobber is mandatory for restoration.** `Vault.create(path, data)` is the public atomic
 no-clobber primitive: it throws if the original path is occupied. Restore therefore reads the copy,
-creates the original, and only then archives the copy. A create failure changes nothing; an archive
-failure after create leaves a duplicate.
+recognises a destination that is already occupied, creates the original, and only then archives the
+copy. The lookup never authorises the write: `create` remains the sole safety guard, so a destination
+that appears after lookup still makes create fail without clobbering it. A confirmed existing file or
+folder becomes `DestinationOccupied`; a create failure changes nothing; an archive failure after
+create leaves a duplicate.
+
+**Create-error classification is limited by the public API.** Obsidian exposes no typed create
+error. If lookup saw an empty path and `create` then fails, callers cannot reliably distinguish a
+race-created destination from permissions or an invalid path. The raw cause is preserved rather than
+guessed, and the UI must not claim a specific cause for that failure.
 
 Recovery archival still uses a checked `vault.rename`, whose contract does not promise no-clobber.
 The Adapter check sees unloaded artifacts and narrows the window, but cannot close it. A concurrent
@@ -258,6 +266,7 @@ file* stays inside the excluded folder and is excluded too. Regression test requ
 | write rejects, or app dies mid-write | **original may be truncated** |
 | `process` succeeds, then app dies | resolved original, copies unmoved — benign, rediscovered |
 | restore create finds an occupied original | clean abort, copy untouched |
+| restore create fails after an empty lookup | clean abort with raw, unclassified cause; copy untouched |
 | restore create succeeds, then archive fails | original and copy both remain — duplicate, no loss |
 | a copy changes between review and move | the *current* content is moved, not the reviewed content |
 | `rename` throws on one copy | that copy stays, others still processed |

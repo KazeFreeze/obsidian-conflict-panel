@@ -83,8 +83,15 @@ export class VaultOps {
 	/** Restore without clobber: create first, then archive the still-existing copy. */
 	async restoreTo(copy: TFile, originalPath: string): Promise<void> {
 		const content = await this.app.vault.read(copy);
-		// Vault.create throws if occupied. Only archive after atomic no-clobber
-		// creation succeeds, so every later failure leaves a duplicate, not loss.
+		// This lookup only recognizes a destination that is already occupied. It
+		// NEVER authorizes the write and is not the old check-then-act scheme:
+		// create() remains the sole no-clobber safety guard. If the path is empty
+		// now but occupied before create runs, create throws and nothing is clobbered.
+		if (this.app.vault.getAbstractFileByPath(originalPath)) {
+			throw new DestinationOccupied(originalPath);
+		}
+		// Obsidian exposes no typed create error. An occupancy race, permissions,
+		// and an invalid path therefore remain distinct only as their raw causes.
 		await this.app.vault.create(originalPath, content);
 		await this.moveToRecovery(copy);
 	}

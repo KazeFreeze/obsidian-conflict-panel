@@ -1,6 +1,6 @@
 import type { App, TFile } from "obsidian";
 import { describe, expect, it, vi } from "vitest";
-import { ArchiveNameTooLong, StaleInput, VaultOps } from "./vault-ops";
+import { ArchiveNameTooLong, DestinationOccupied, StaleInput, VaultOps } from "./vault-ops";
 
 const file = (path: string): TFile => ({ path }) as TFile;
 
@@ -11,6 +11,7 @@ class FakeVault {
 	readonly files = new Map<string, string>();
 	readonly folders = new Set<string>();
 	readonly renameFailures = new Set<string>();
+	createFailure: Error | null = null;
 
 	readonly adapter = {
 		exists: vi.fn(async (path: string) => this.files.has(path) || this.folders.has(path)),
@@ -29,6 +30,7 @@ class FakeVault {
 		return content;
 	});
 	readonly create = vi.fn(async (path: string, content: string) => {
+		if (this.createFailure) throw this.createFailure;
 		if (this.files.has(path) || this.folders.has(path)) throw new Error(`Occupied: ${path}`);
 		this.files.set(path, content);
 		return file(path);
@@ -45,6 +47,10 @@ class FakeVault {
 		// Model the overwrite-prone adapter semantics documented by VaultOps.
 		this.files.set(target, content);
 		this.files.delete(source.path);
+	});
+	readonly getAbstractFileByPath = vi.fn((path: string) => {
+		if (this.files.has(path) || this.folders.has(path)) return { path };
+		return null;
 	});
 
 	constructor(entries: ReadonlyArray<readonly [string, string]> = []) {
@@ -139,10 +145,33 @@ describe("VaultOps restore", () => {
 		]);
 		await expect(
 			new VaultOps(vault.asApp(), "Recovery").restoreTo(file("copy.md"), "original.md"),
-		).rejects.toThrow("Occupied: original.md");
+		).rejects.toBeInstanceOf(DestinationOccupied);
 		expect(vault.files.get("original.md")).toBe("existing original");
 		expect(vault.files.get("copy.md")).toBe("copy contents");
 		expect(vault.files.has("Recovery/copy.md.conflictbak")).toBe(false);
+	});
+
+	it("reports a folder at the original path as occupied", async () => {
+		const vault = new FakeVault([["copy.md", "copy contents"]]);
+		vault.folders.add("original.md");
+
+		await expect(
+			new VaultOps(vault.asApp(), "Recovery").restoreTo(file("copy.md"), "original.md"),
+		).rejects.toBeInstanceOf(DestinationOccupied);
+		expect(vault.create).not.toHaveBeenCalled();
+		expect(vault.files.get("copy.md")).toBe("copy contents");
+	});
+
+	it("preserves an unclassified create failure as its raw cause", async () => {
+		const permissions = new Error("permission denied");
+		const vault = new FakeVault([["copy.md", "copy contents"]]);
+		vault.createFailure = permissions;
+
+		await expect(
+			new VaultOps(vault.asApp(), "Recovery").restoreTo(file("copy.md"), "original.md"),
+		).rejects.toBe(permissions);
+		expect(vault.files.get("copy.md")).toBe("copy contents");
+		expect(vault.files.has("original.md")).toBe(false);
 	});
 });
 
