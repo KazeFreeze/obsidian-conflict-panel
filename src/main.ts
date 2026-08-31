@@ -1,4 +1,5 @@
 import { Plugin } from "obsidian";
+import { CONFLICT_COMPARE_VIEW, ConflictCompareView } from "./compare-view";
 import type { ConflictGroup } from "./core/types";
 import { CONFLICT_PANEL_VIEW, ConflictPanelView } from "./panel-view";
 import { scanConflicts } from "./scan";
@@ -8,6 +9,7 @@ import {
 	DEFAULT_SETTINGS,
 	normalizeRecoveryFolder,
 } from "./settings";
+import { VaultOps } from "./vault-ops";
 
 export default class ConflictPanelPlugin extends Plugin {
 	// Definite-assignment assertion: strict mode cannot see that onload() assigns
@@ -15,9 +17,11 @@ export default class ConflictPanelPlugin extends Plugin {
 	// the `!` the build fails with TS2564. The official sample plugin does the same.
 	settings!: ConflictPanelSettings;
 	private groups: ConflictGroup[] = [];
+	private ops!: VaultOps;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
+		this.rebuildOps();
 		this.registerView(
 			CONFLICT_PANEL_VIEW,
 			(leaf) =>
@@ -26,6 +30,10 @@ export default class ConflictPanelPlugin extends Plugin {
 					(group) => void this.openCompareView(group),
 					() => this.rescan(),
 				),
+		);
+		this.registerView(
+			CONFLICT_COMPARE_VIEW,
+			(leaf) => new ConflictCompareView(leaf, () => this.ops, () => this.rescan()),
 		);
 		this.addRibbonIcon("git-merge", "Show conflicts", () => void this.revealPanel());
 		this.addCommand({
@@ -55,9 +63,16 @@ export default class ConflictPanelPlugin extends Plugin {
 		await this.rescan();
 	}
 
-	/** Task 6 replaces this staging method once the compare view exists. */
 	async openCompareView(group: ConflictGroup): Promise<void> {
-		void group;
+		const leaf = this.app.workspace.getLeaf(true);
+		await leaf.setViewState({ type: CONFLICT_COMPARE_VIEW, active: true });
+		if (leaf.view instanceof ConflictCompareView) {
+			await leaf.view.setGroup(group);
+		}
+	}
+
+	private rebuildOps(): void {
+		this.ops = new VaultOps(this.app, this.settings.recoveryFolder);
 	}
 
 	async loadSettings(): Promise<void> {
@@ -71,5 +86,7 @@ export default class ConflictPanelPlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+		this.rebuildOps();
+		await this.rescan();
 	}
 }

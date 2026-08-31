@@ -6,3 +6,55 @@ available in the app when your plugin is enabled.
 If your plugin does not need CSS, delete this file.
 
 */
+
+.conflict-panel button,
+.conflict-compare button,
+.conflict-recovery button {
+	/* 48dp minimum touch target: this plugin runs on Android. */
+	min-height: 48px;
+}
+
+.conflict-panel__entry,
+.conflict-compare__copies button {
+	width: 100%;
+	text-align: left;
+	margin-bottom: 6px;
+}
+
+.conflict-compare__actions button {
+	width: auto;
+	padding: 0 16px;
+	margin-right: 8px;
+}
+
+.conflict-compare__warning {
+	color: var(--text-warning);
+	font-weight: 600;
+}
+
+.conflict-compare__diff {
+	font-family: var(--font-monospace);
+	font-size: 0.85em;
+	overflow-x: auto;
+}
+
+.conflict-compare__hunk {
+	border-left: 2px solid var(--background-modifier-border);
+	padding-left: 8px;
+	margin: 8px 0;
+}
+
+.conflict-compare__line.is-left {
+	background: var(--background-modifier-error);
+}
+
+.conflict-compare__line.is-right {
+	background: var(--background-modifier-success);
+}
+
+@media (max-width: 600px) {
+	.conflict-compare__actions button {
+		width: 100%;
+		margin: 0 0 8px;
+	}
+}

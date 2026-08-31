@@ -697,7 +697,8 @@ git commit -m "feat: sidebar panel listing conflict groups with a count"
 ### Task 6: `src/compare-view.ts`
 
 The only surface that calls `VaultOps`. Every action goes through the editor guard first.
-**No `vault.*` call appears in this file** — `boundaries.test.ts` enforces it.
+**No vault mutation call appears in this file** — reads and lookups use `vault.*`, while
+`boundaries.test.ts` enforces that every mutation goes through `VaultOps`.
 
 **Files:**
 - Create: `src/compare-view.ts`
@@ -708,7 +709,7 @@ The only surface that calls `VaultOps`. Every action goes through the editor gua
 ```ts
 import { ItemView, Notice, TFile, WorkspaceLeaf } from "obsidian";
 import { needsConfirmation, toHunks, type DiffResult } from "./core/diff";
-import { describeGroup } from "./core/entry-view";
+import { describeGroup, type EntryAction } from "./core/entry-view";
 import type { ConflictGroup } from "./core/types";
 import { blockingPaths, openPathsIn } from "./editor-guard";
 import {
@@ -759,9 +760,9 @@ export class ConflictCompareView extends ItemView {
 	/**
 	 * Read both sides and decide about the diff ONCE.
 	 *
-	 * toHunks is bounded but BLOCKING, so it must never run inside render() or an
-	 * event handler. Past the soft band it does not run here either: the view shows
-	 * a button, and the freeze becomes something the user asked for.
+	 * toHunks is bounded but BLOCKING, so it must never run inside render(). Past
+	 * the soft band it does not run here either: the view shows a button, and the
+	 * event-handler freeze becomes something the user explicitly asked for.
 	 */
 	private async loadSelection(): Promise<void> {
 		// Tapping through copies starts overlapping reads. Without this token an older
@@ -884,10 +885,10 @@ recovery, not just the selected one** — the user picks one *X* to keep, and ev
 preserved in recovery rather than left behind to be rediscovered.
 
 ```ts
-	private renderActions(root: HTMLElement, actions: readonly string[]): void {
+	private renderActions(root: HTMLElement, actions: readonly EntryAction[]): void {
 		if (actions.length === 0) return;
 		const bar = root.createDiv({ cls: "conflict-compare__actions" });
-		const label: Record<string, string> = {
+		const label: Record<EntryAction, string> = {
 			"keep-original": "Keep the original",
 			"keep-copy": "Keep this copy",
 			"save-as-new": "Save this copy as a new note",
@@ -896,13 +897,13 @@ preserved in recovery rather than left behind to be rediscovered.
 		};
 		for (const action of actions) {
 			// Visible text, never an icon or a tooltip alone: this must work on touch.
-			const button = bar.createEl("button", { text: label[action] ?? action });
+			const button = bar.createEl("button", { text: label[action] });
 			button.addEventListener("click", () => void this.run(action));
 		}
 	}
 
 	/** Single entry point into VaultOps. Guards, dispatches, reports. */
-	private async run(action: string): Promise<void> {
+	private async run(action: EntryAction): Promise<void> {
 		const group = this.group;
 		if (!group || this.busy) return;
 
@@ -942,7 +943,7 @@ preserved in recovery rather than left behind to be rediscovered.
 	}
 
 	/** Returns whether the group is resolved and the tab should close. */
-	private async dispatch(action: string): Promise<boolean> {
+	private async dispatch(action: EntryAction): Promise<boolean> {
 		const group = this.group;
 		if (!group) return false;
 		const copy = this.copyFile();
@@ -1043,11 +1044,14 @@ they pick up the new instance without being re-registered.
 Append to `styles.css`:
 
 ```css
-.conflict-panel__entry,
-.conflict-compare__actions button,
-.conflict-compare__copies button {
+.conflict-panel button,
+.conflict-compare button,
+.conflict-recovery button {
 	/* 48dp minimum touch target: this plugin runs on Android. */
 	min-height: 48px;
+}
+.conflict-panel__entry,
+.conflict-compare__copies button {
 	width: 100%;
 	text-align: left;
 	margin-bottom: 6px;
