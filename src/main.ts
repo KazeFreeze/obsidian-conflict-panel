@@ -68,19 +68,29 @@ export default class ConflictPanelPlugin extends Plugin {
 
 	async revealPanel(): Promise<void> {
 		const [existing] = this.app.workspace.getLeavesOfType(CONFLICT_PANEL_VIEW);
+		// revealLeaf, not setActiveLeaf: only revealLeaf UNCOLLAPSES the sidebar the
+		// leaf lives in. With a collapsed right sidebar, which is the default, the
+		// ribbon icon otherwise creates the view and shows the user nothing at all.
+		// Awaiting it also guarantees the view is loaded rather than deferred.
 		if (existing) {
-			this.app.workspace.setActiveLeaf(existing, { focus: true });
+			await this.app.workspace.revealLeaf(existing);
+			await this.rescan();
 			return;
 		}
 		const leaf = this.app.workspace.getRightLeaf(false);
 		if (!leaf) return;
 		await leaf.setViewState({ type: CONFLICT_PANEL_VIEW, active: true });
+		await this.app.workspace.revealLeaf(leaf);
 		await this.rescan();
 	}
 
 	async openCompareView(group: ConflictGroup): Promise<void> {
 		const leaf = this.app.workspace.getLeaf(true);
 		await leaf.setViewState({ type: CONFLICT_COMPARE_VIEW, active: true });
+		// Since 1.7.2 setViewState can leave a DEFERRED view, so leaf.view is not yet
+		// a ConflictCompareView and the instanceof below would silently skip
+		// setGroup, opening a blank tab. revealLeaf awaits the real view.
+		await this.app.workspace.revealLeaf(leaf);
 		if (leaf.view instanceof ConflictCompareView) {
 			await leaf.view.setGroup(group);
 		}
@@ -89,11 +99,12 @@ export default class ConflictPanelPlugin extends Plugin {
 	async openRecovery(): Promise<void> {
 		const [existing] = this.app.workspace.getLeavesOfType(CONFLICT_RECOVERY_VIEW);
 		if (existing) {
-			this.app.workspace.setActiveLeaf(existing, { focus: true });
+			await this.app.workspace.revealLeaf(existing);
 			return;
 		}
 		const leaf = this.app.workspace.getLeaf(true);
 		await leaf.setViewState({ type: CONFLICT_RECOVERY_VIEW, active: true });
+		await this.app.workspace.revealLeaf(leaf);
 	}
 
 	private rebuildOps(): void {

@@ -2,7 +2,7 @@
 	"id": "conflict-panel",
 	"name": "Conflict Panel",
 	"version": "0.1.0",
-	"minAppVersion": "1.1.0",
+	"minAppVersion": "1.7.2",
 	"description": "Find and resolve Syncthing sync-conflict files without leaving Obsidian.",
 	"author": "Bernard G. Tapiru, Jr.",
 	"authorUrl": "https://github.com/KazeFreeze",
