@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, normalizePath, PluginSettingTab, Setting } from "obsidian";
 import type ConflictPanelPlugin from "./main";
 
 export interface ConflictPanelSettings {
@@ -9,6 +9,11 @@ export interface ConflictPanelSettings {
 export const DEFAULT_SETTINGS: ConflictPanelSettings = {
 	recoveryFolder: "Conflict Recovery",
 };
+
+/** Canonicalize once where settings enter the application. */
+export function normalizeRecoveryFolder(value: string): string {
+	return normalizePath(value.trim()) || DEFAULT_SETTINGS.recoveryFolder;
+}
 
 export class ConflictPanelSettingTab extends PluginSettingTab {
 	plugin: ConflictPanelPlugin;
@@ -32,8 +37,7 @@ export class ConflictPanelSettingTab extends PluginSettingTab {
 					.setPlaceholder("Conflict Recovery")
 					.setValue(this.plugin.settings.recoveryFolder)
 					.onChange(async (value) => {
-						this.plugin.settings.recoveryFolder =
-							value.trim() || DEFAULT_SETTINGS.recoveryFolder;
+						this.plugin.settings.recoveryFolder = normalizeRecoveryFolder(value);
 						await this.plugin.saveSettings();
 					}),
 			);

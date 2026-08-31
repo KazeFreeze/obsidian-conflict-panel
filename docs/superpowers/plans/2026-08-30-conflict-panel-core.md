@@ -95,7 +95,7 @@ export default defineConfig({
 - [ ] **Step 4: Replace `src/settings.ts`**
 
 ```ts
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, normalizePath, PluginSettingTab, Setting } from "obsidian";
 import type ConflictPanelPlugin from "./main";
 
 export interface ConflictPanelSettings {
@@ -106,6 +106,11 @@ export interface ConflictPanelSettings {
 export const DEFAULT_SETTINGS: ConflictPanelSettings = {
 	recoveryFolder: "Conflict Recovery",
 };
+
+/** Canonicalize once where settings enter the application. */
+export function normalizeRecoveryFolder(value: string): string {
+	return normalizePath(value.trim()) || DEFAULT_SETTINGS.recoveryFolder;
+}
 
 export class ConflictPanelSettingTab extends PluginSettingTab {
 	plugin: ConflictPanelPlugin;
@@ -129,8 +134,7 @@ export class ConflictPanelSettingTab extends PluginSettingTab {
 					.setPlaceholder("Conflict Recovery")
 					.setValue(this.plugin.settings.recoveryFolder)
 					.onChange(async (value) => {
-						this.plugin.settings.recoveryFolder =
-							value.trim() || DEFAULT_SETTINGS.recoveryFolder;
+						this.plugin.settings.recoveryFolder = normalizeRecoveryFolder(value);
 						await this.plugin.saveSettings();
 					}),
 			);
@@ -146,6 +150,7 @@ import {
 	ConflictPanelSettings,
 	ConflictPanelSettingTab,
 	DEFAULT_SETTINGS,
+	normalizeRecoveryFolder,
 } from "./settings";
 
 export default class ConflictPanelPlugin extends Plugin {
@@ -160,7 +165,12 @@ export default class ConflictPanelPlugin extends Plugin {
 	}
 
 	async loadSettings(): Promise<void> {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.settings = Object.assign(
+			{},
+			DEFAULT_SETTINGS,
+			(await this.loadData()) as Partial<ConflictPanelSettings>,
+		);
+		this.settings.recoveryFolder = normalizeRecoveryFolder(this.settings.recoveryFolder);
 	}
 
 	async saveSettings(): Promise<void> {
@@ -168,6 +178,13 @@ export default class ConflictPanelPlugin extends Plugin {
 	}
 }
 ```
+
+- [ ] **Step 5a: Test settings-boundary normalization**
+
+Mock Obsidian's `normalizePath` in `src/settings.test.ts`. Assert that leading and repeated
+separators, `Archive/./Conflicts`, and `Archive\\Conflicts` all become the same canonical value,
+and that an empty normalized value falls back to the default. Core grouping receives only this
+canonical value and must not implement a second normalizer.
 
 - [ ] **Step 6: Replace `README.md`**
 
@@ -410,23 +427,9 @@ describe("groupConflicts", () => {
 		expect(groupConflicts([c], vault([c]), "Conflict Recovery")).toHaveLength(0);
 	});
 
-	it.each([
-		"Conflict Recovery/",
-		"/Conflict Recovery",
-		"//Conflict Recovery///",
-	])("normalises recovery setting separators in %j", (recoveryFolder) => {
-		const c = "Conflict Recovery/x.sync-conflict-20260830-143000-AAA.md";
-		expect(groupConflicts([c], vault([c]), recoveryFolder)).toHaveLength(0);
-	});
-
-	it("collapses doubled separators inside the recovery setting", () => {
-		const c = "Archive/Conflicts/x.sync-conflict-20260830-143000-AAA.md";
-		expect(groupConflicts([c], vault([c]), "Archive//Conflicts")).toHaveLength(0);
-	});
-
 	it("does not exclude a sibling whose name merely shares the prefix", () => {
 		const c = "Conflict Recovery-old/x.sync-conflict-20260830-143000-AAA.md";
-		expect(groupConflicts([c], vault([c]), "Conflict Recovery/")).toHaveLength(1);
+		expect(groupConflicts([c], vault([c]), "Conflict Recovery")).toHaveLength(1);
 	});
 
 	it("collects several copies under one original, oldest first", () => {
@@ -484,9 +487,9 @@ export function groupConflicts(
 	index: VaultIndex,
 	recoveryFolder: string,
 ): ConflictGroup[] {
-	const recoveryRoot = recoveryFolder
-		.replace(/\/+/g, "/")
-		.replace(/^\/+|\/+$/g, "");
+	// Settings are canonicalized once at the Obsidian boundary. Core modules use
+	// that value verbatim so detection, folder creation, and rename agree.
+	const recoveryRoot = recoveryFolder;
 	const prefix = `${recoveryRoot}/`;
 	const byOriginal = new Map<string, ParsedConflictFile[]>();
 

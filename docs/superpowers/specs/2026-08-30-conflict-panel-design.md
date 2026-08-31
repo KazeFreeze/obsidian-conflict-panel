@@ -235,8 +235,11 @@ Syncthing REST API there is no other signal. Every group therefore offers **view
 group** as an escape hatch, and grouping is never acted on without the user seeing which files were
 paired.
 
-**Re-detection is prevented by folder exclusion, not by the extension.** `core/detect.ts` normalises
-the path and rejects the recovery root outright. The non-note extension is defence in depth: an
+**Re-detection is prevented by folder exclusion, not by the extension.** The recovery-folder setting
+is normalized once with Obsidian's `normalizePath` when loaded or changed, then that one canonical
+value is passed unchanged to grouping, folder creation, and archive naming. This handles leading or
+repeated separators, `.` segments, and backslashes without three implementations disagreeing.
+`core/group.ts` rejects that recovery root outright. The non-note extension is defence in depth: an
 ordinary note can legitimately contain a valid-looking `.sync-conflict-*` sequence, especially with
 multiple extensions, so filename rules alone are insufficient. A Syncthing conflict *of an archived
 file* stays inside the excluded folder and is excluded too. Regression test required.

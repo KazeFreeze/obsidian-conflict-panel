@@ -3,6 +3,7 @@ import {
 	ConflictPanelSettings,
 	ConflictPanelSettingTab,
 	DEFAULT_SETTINGS,
+	normalizeRecoveryFolder,
 } from "./settings";
 
 export default class ConflictPanelPlugin extends Plugin {
@@ -22,6 +23,7 @@ export default class ConflictPanelPlugin extends Plugin {
 			DEFAULT_SETTINGS,
 			(await this.loadData()) as Partial<ConflictPanelSettings>,
 		);
+		this.settings.recoveryFolder = normalizeRecoveryFolder(this.settings.recoveryFolder);
 	}
 
 	async saveSettings(): Promise<void> {

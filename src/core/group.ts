@@ -36,9 +36,9 @@ export function groupConflicts(
 	index: VaultIndex,
 	recoveryFolder: string,
 ): ConflictGroup[] {
-	const recoveryRoot = recoveryFolder
-		.replace(/\/+/g, "/")
-		.replace(/^\/+|\/+$/g, "");
+	// Settings are canonicalized once at the Obsidian boundary. Core modules use
+	// that value verbatim so detection, folder creation, and rename agree.
+	const recoveryRoot = recoveryFolder;
 	const prefix = `${recoveryRoot}/`;
 	const byOriginal = new Map<string, ParsedConflictFile[]>();
 
