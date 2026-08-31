@@ -64,6 +64,17 @@ through `VaultOps`, which is why Task 4 exists.
 guard. An `exists()` lookup may only *reject*; it may never authorise a write. This was removed
 from core restore across three review rounds and must not come back in a view.
 
+**A recovery artifact's decoded path is untrusted input.** `sourcePathFromRecovery` turns
+`%2F` back into `/`, so an artifact named `..%2Foutside.md.conflictbak` — a perfectly ordinary
+filename that Syncthing will happily deliver — decodes to `../outside.md`. Round four
+established that `..` escapes the vault through adapter-backed paths. Every decoded path is
+validated before it reaches a write, and an artifact that fails is listed without a restore
+button rather than silently rewritten.
+
+**The recovery folder can change while a view is open.** `saveSettings()` can move it at any
+time, so a `VaultOps` captured once in `onload` goes stale and would archive into the old
+folder while scans exclude the new one. Views receive an accessor, never a snapshot.
+
 **Every control needs a visible text label** and a ≥48dp touch target. Two buttons
 distinguished only by a tooltip is the exact defect that made an audited plugin unusable on
 Android.
@@ -78,6 +89,7 @@ Android.
 | file | responsibility |
 |---|---|
 | `src/core/diff.ts` | *Modified.* Add `needsConfirmation`, the soft band above which the diff is user-initiated. |
+| `src/core/safe-path.ts` | `isSafeVaultPath`, the reject-don't-sanitise guard for decoded artifact paths. |
 | `src/vault-ops.ts` | *Modified.* Add `createNew`, the only write path the views get. |
 | `src/scan.ts` | Build `VaultIndex` from the vault, call `groupConflicts`, cache the result. |
 | `src/editor-guard.ts` | Answer "is any file in this group open in an editor?" Testable with a fake workspace. |
@@ -354,17 +366,84 @@ git commit -m "feat: make an expensive diff user-initiated rather than automatic
 
 ---
 
-### Task 4: `VaultOps.createNew`
+### Task 4: the guarded write path
 
-Both remaining writes in this phase — save-as-new, and restoring a recovery artifact — are
-"create a file at a path that must be empty". That is exactly what `restoreTo` already does
-internally. Expose it once rather than letting two views reach for `vault.create` and turn
+Both remaining writes in this phase — save-as-new, and copying a recovery artifact back — are
+"create a file at a path that must be empty". That is what `restoreTo` already does internally.
+Expose it once rather than letting two views reach for `vault.create` and turn
 `boundaries.test.ts` red.
 
+One of those two paths comes from a **filename on disk**, so it also needs validating. Both
+halves live in this task because they are one concern: the single chokepoint through which a
+view may write.
+
 **Files:**
+- Create: `src/core/safe-path.ts`, `src/core/safe-path.test.ts`
 - Modify: `src/vault-ops.ts`, `src/vault-ops.test.ts`
 
-- [ ] **Step 1: Add the failing tests**
+- [ ] **Step 1: Write the failing test `src/core/safe-path.test.ts`**
+
+```ts
+import { describe, expect, it } from "vitest";
+import { isSafeVaultPath } from "./safe-path";
+
+describe("isSafeVaultPath", () => {
+	it.each(["note.md", "a/b/note.md", "Folder Name/note with spaces.md"])(
+		"accepts the ordinary vault path %j",
+		(path) => expect(isSafeVaultPath(path)).toBe(true),
+	);
+
+	it.each([
+		"../outside.md",          // the decoded-artifact attack
+		"a/../../outside.md",
+		"..",
+		"/absolute.md",
+		"a//b.md",                // an empty segment
+		"a/./b.md",               // harmless but not a path we produced
+		"",
+	])("rejects %j", (path) => expect(isSafeVaultPath(path)).toBe(false));
+});
+```
+
+- [ ] **Step 2: Run and confirm it fails**
+
+Run: `npm test -- safe-path`
+Expected: FAIL, cannot resolve `./safe-path`.
+
+- [ ] **Step 3: Implement `src/core/safe-path.ts`**
+
+```ts
+/**
+ * Is this a path we are willing to write to?
+ *
+ * REJECTS rather than sanitises, deliberately. `normalizeRecoveryFolder` cleans up a
+ * setting the user typed, where a silent correction is helpful. This is different:
+ * the input is a FILENAME ON DISK, decoded by `sourcePathFromRecovery`, and
+ * `..%2Foutside.md.conflictbak` decodes to `../outside.md`. Silently rewriting that
+ * to somewhere else would write a file the user never asked for, at a path they
+ * cannot predict. Refusing is the only honest answer.
+ */
+export function isSafeVaultPath(path: string): boolean {
+	if (path === "" || path.startsWith("/")) return false;
+	return path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}
+```
+
+- [ ] **Step 4: Run and confirm it passes**
+
+Run: `npm test -- safe-path`
+Expected: PASS, 10 cases.
+
+- [ ] **Step 5: Commit the guard**
+
+```bash
+git add src/core/safe-path.ts src/core/safe-path.test.ts
+git commit -m "feat: reject a decoded artifact path that would escape the vault"
+```
+
+- [ ] **Step 6: Write the failing tests for `createNew`**
+
+Add to `src/vault-ops.test.ts`:
 
 ```ts
 describe("createNew", () => {
@@ -377,17 +456,33 @@ describe("createNew", () => {
 	it("throws DestinationOccupied when a FOLDER holds the path", async () => { /* ... */ });
 
 	it("leaves the existing file byte-identical when it refuses", async () => { /* ... */ });
+
+	it("throws UnsafePath before touching the vault for ../outside.md", async () => {
+		await expect(ops.createNew("../outside.md", "x")).rejects.toBeInstanceOf(UnsafePath);
+	});
+
+	it("writes nothing anywhere when the path is unsafe", async () => {
+		/* assert the whole in-memory model is unchanged, not just the target */
+	});
 });
 ```
 
-The fourth is the one that must fail against a broken implementation: a `createNew` that
-overwrites passes the first three.
+The fourth and sixth are the ones that must fail against a broken implementation: a `createNew`
+that overwrites passes the first three, and one that validates *after* writing passes the fifth.
 
-- [ ] **Step 2: Run and confirm they fail**
+- [ ] **Step 7: Run and confirm they fail**
 
 Run: `npm test -- vault-ops`
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 8: Implement `createNew`**
+
+```ts
+export class UnsafePath extends Error {
+	constructor(readonly path: string) {
+		super(`${path} is not a path inside this vault. Nothing was written.`);
+	}
+}
+```
 
 ```ts
 	/**
@@ -396,19 +491,23 @@ Run: `npm test -- vault-ops`
 	 * The lookup only RECOGNISES an occupied path. It never authorises the write:
 	 * `create` remains the sole no-clobber guard, exactly as in `restoreTo`. Do not
 	 * turn this into a check-then-act by acting on what the lookup returns.
+	 *
+	 * The safety check comes FIRST, before any vault call, because one caller passes
+	 * a path decoded from a filename on disk.
 	 */
 	async createNew(path: string, content: string): Promise<void> {
+		if (!isSafeVaultPath(path)) throw new UnsafePath(path);
 		if (this.app.vault.getAbstractFileByPath(path)) throw new DestinationOccupied(path);
 		await this.app.vault.create(path, content);
 	}
 ```
 
-- [ ] **Step 4: Run and confirm they pass**
+- [ ] **Step 9: Run and confirm they pass**
 
 Run: `npm test`
-Expected: all green, including `boundaries`.
+Expected: all green, `boundaries` included.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add src/vault-ops.ts src/vault-ops.test.ts
@@ -583,7 +682,13 @@ import { needsConfirmation, toHunks, type DiffResult } from "./core/diff";
 import { describeGroup } from "./core/entry-view";
 import type { ConflictGroup } from "./core/types";
 import { blockingPaths, openPathsIn } from "./editor-guard";
-import { DestinationOccupied, RestoreArchiveFailed, StaleInput, VaultOps } from "./vault-ops";
+import {
+	DestinationOccupied,
+	RestoreArchiveFailed,
+	StaleInput,
+	UnsafePath,
+	VaultOps,
+} from "./vault-ops";
 
 export const CONFLICT_COMPARE_VIEW = "conflict-panel-compare";
 
@@ -597,10 +702,15 @@ export class ConflictCompareView extends ItemView {
 	private diff: DiffResult | null = null;
 	private awaitingConfirmation = false;
 	private busy = false;
+	/** Bumped on every selection change so a slow read cannot land after a fast one. */
+	private loadToken = 0;
 
 	constructor(
 		leaf: WorkspaceLeaf,
-		private readonly ops: VaultOps,
+		// An ACCESSOR, not the instance. saveSettings() can move the recovery folder
+		// while this view is open, and a captured VaultOps would archive into the old
+		// one while scans exclude the new one.
+		private readonly ops: () => VaultOps,
 		private readonly afterResolve: () => Promise<void>,
 	) {
 		super(leaf);
@@ -625,18 +735,25 @@ export class ConflictCompareView extends ItemView {
 	 * a button, and the freeze becomes something the user asked for.
 	 */
 	private async loadSelection(): Promise<void> {
+		// Tapping through copies starts overlapping reads. Without this token an older
+		// read can finish LAST, leaving selectedCopy on B while reviewedCopy holds A —
+		// and "Keep this copy" would then write the wrong content. Nothing is assigned
+		// to a field until the token proves this read is still the current one.
+		const token = ++this.loadToken;
 		const copy = this.copyFile();
 		const original = this.originalFile();
-		this.reviewedCopy = copy ? await this.app.vault.read(copy) : null;
-		this.reviewedOriginal = original ? await this.app.vault.read(original) : null;
+		const copyText = copy ? await this.app.vault.read(copy) : null;
+		const originalText = original ? await this.app.vault.read(original) : null;
+		if (token !== this.loadToken) return;
+
+		this.reviewedCopy = copyText;
+		this.reviewedOriginal = originalText;
 		this.diff = null;
 		this.awaitingConfirmation = false;
 
-		const left = this.reviewedOriginal;
-		const right = this.reviewedCopy;
-		if (left === null || right === null) return;
-		if (needsConfirmation(left, right)) this.awaitingConfirmation = true;
-		else this.diff = toHunks(left, right);
+		if (originalText === null || copyText === null) return;
+		if (needsConfirmation(originalText, copyText)) this.awaitingConfirmation = true;
+		else this.diff = toHunks(originalText, copyText);
 	}
 
 	/** The one deliberate blocking call, reached only by pressing the button. */
@@ -692,6 +809,7 @@ export class ConflictCompareView extends ItemView {
 			const button = picker.createEl("button", { text: label });
 			if (i === this.selectedCopy) button.addClass("is-selected");
 			button.addEventListener("click", () => {
+				if (this.busy) return; // a write is in flight against the current selection
 				this.selectedCopy = i;
 				void this.loadSelection().then(() => this.render());
 			});
@@ -785,7 +903,7 @@ preserved in recovery rather than left behind to be rediscovered.
 	}
 
 	private async archiveAll(files: TFile[]): Promise<void> {
-		const results = await this.ops.moveAllToRecovery(files);
+		const results = await this.ops().moveAllToRecovery(files);
 		const failed = results.filter((r) => r.status === "failed").length;
 		new Notice(
 			failed === 0
@@ -808,7 +926,7 @@ preserved in recovery rather than left behind to be rediscovered.
 
 		if (action === "keep-copy") {
 			if (!original || !copy || this.reviewedOriginal === null || this.reviewedCopy === null) return false;
-			await this.ops.replaceOriginal(original, this.reviewedOriginal, this.reviewedCopy);
+			await this.ops().replaceOriginal(original, this.reviewedOriginal, this.reviewedCopy);
 			// Spec: ALL copies move to recovery, the kept one included.
 			await this.archiveAll(this.allCopyFiles());
 			new Notice(`${group.originalPath} now holds the selected copy.`);
@@ -818,7 +936,7 @@ preserved in recovery rather than left behind to be rediscovered.
 		if (action === "restore-copy") {
 			if (!copy) return false;
 			// restoreTo archives the copy it restored; the remaining ones follow.
-			await this.ops.restoreTo(copy, group.originalPath);
+			await this.ops().restoreTo(copy, group.originalPath);
 			const rest = this.allCopyFiles();
 			if (rest.length > 0) await this.archiveAll(rest);
 			new Notice(`Restored ${group.originalPath}.`);
@@ -830,7 +948,7 @@ preserved in recovery rather than left behind to be rediscovered.
 			const device = group.copies[this.selectedCopy].deviceId;
 			const target = `${group.originalPath.replace(/\.md$/, "")} (from ${device}).md`;
 			// Through VaultOps: this file may not call vault.create. See boundaries.test.ts.
-			await this.ops.createNew(target, this.reviewedCopy);
+			await this.ops().createNew(target, this.reviewedCopy);
 			// Deliberately resolves nothing: both inputs stay and the group is
 			// rediscovered on the next scan. Say so, and keep the tab open.
 			new Notice(`Saved ${target}. The conflict is still unresolved.`);
@@ -843,7 +961,11 @@ preserved in recovery rather than left behind to be rediscovered.
 	private report(error: unknown): void {
 		if (error instanceof StaleInput) {
 			new Notice("That file changed while you were reviewing it. Nothing was written. Rescan and try again.");
-		} else if (error instanceof RestoreArchiveFailed || error instanceof DestinationOccupied) {
+		} else if (
+			error instanceof RestoreArchiveFailed ||
+			error instanceof DestinationOccupied ||
+			error instanceof UnsafePath
+		) {
 			new Notice(String((error as Error).message));
 		} else {
 			new Notice(`That did not work: ${String(error)}`);
@@ -856,7 +978,7 @@ preserved in recovery rather than left behind to be rediscovered.
 ```ts
 this.registerView(
 	CONFLICT_COMPARE_VIEW,
-	(leaf) => new ConflictCompareView(leaf, this.ops, () => this.rescan()),
+	(leaf) => new ConflictCompareView(leaf, () => this.ops, () => this.rescan()),
 );
 ```
 
@@ -868,11 +990,24 @@ async openCompareView(group: ConflictGroup): Promise<void> {
 }
 ```
 
-Construct `VaultOps` in `onload()` after settings load:
+Construct `VaultOps` in `onload()` after settings load, **and rebuild it whenever the folder
+moves**. `VaultOps` takes the folder in its constructor, so a settings change leaves the old
+instance archiving into the previous directory while `scanConflicts` excludes the new one:
 
 ```ts
-this.ops = new VaultOps(this.app, this.settings.recoveryFolder);
+private rebuildOps(): void {
+	this.ops = new VaultOps(this.app, this.settings.recoveryFolder);
+}
+
+async saveSettings(): Promise<void> {
+	await this.saveData(this.settings);
+	this.rebuildOps();
+	await this.rescan(); // the exclusion root moved, so the group list changes too
+}
 ```
+
+Call `rebuildOps()` once in `onload()` after `loadSettings()`. Views hold `() => this.ops`, so
+they pick up the new instance without being re-registered.
 
 - [ ] **Step 5: Add the styles**
 
@@ -934,7 +1069,8 @@ deletes the race rather than guarding it.
 
 ```ts
 import { ItemView, Notice, WorkspaceLeaf } from "obsidian";
-import { DestinationOccupied, VaultOps } from "./vault-ops";
+import { DestinationOccupied, UnsafePath, VaultOps } from "./vault-ops";
+import { isSafeVaultPath } from "./core/safe-path";
 
 export const CONFLICT_RECOVERY_VIEW = "conflict-panel-recovery";
 
@@ -942,13 +1078,17 @@ interface Artifact {
 	path: string;
 	sourcePath: string;
 	bytes: number;
+	/** False when the decoded path would escape the vault. See isSafeVaultPath. */
+	safe: boolean;
 }
 
 export class ConflictRecoveryView extends ItemView {
 	constructor(
 		leaf: WorkspaceLeaf,
-		private readonly ops: VaultOps,
-		private readonly recoveryFolder: string,
+		// Accessors, not snapshots: saveSettings() can move the recovery folder while
+		// this view is open, and a captured value would list the wrong directory.
+		private readonly ops: () => VaultOps,
+		private readonly recoveryFolder: () => string,
 	) {
 		super(leaf);
 	}
@@ -970,23 +1110,27 @@ export class ConflictRecoveryView extends ItemView {
 	 */
 	private async listArtifacts(): Promise<Artifact[]> {
 		const adapter = this.app.vault.adapter;
-		if (!(await adapter.exists(this.recoveryFolder))) return [];
+		const root = this.recoveryFolder();
+		if (!(await adapter.exists(root))) return [];
 		const found: Artifact[] = [];
 		const walk = async (dir: string): Promise<void> => {
 			const listing = await adapter.list(dir);
 			for (const file of listing.files) {
 				if (!file.endsWith(".conflictbak")) continue;
 				const stat = await adapter.stat(file);
+				// Takes a full path: sourcePathFromRecovery slices at the last "/".
+				const sourcePath = VaultOps.sourcePathFromRecovery(file);
 				found.push({
 					path: file,
-					// Takes a full path: sourcePathFromRecovery slices at the last "/".
-					sourcePath: VaultOps.sourcePathFromRecovery(file),
+					sourcePath,
 					bytes: stat?.size ?? 0,
+					// A filename Syncthing delivered, not one we necessarily wrote.
+					safe: isSafeVaultPath(sourcePath),
 				});
 			}
 			for (const sub of listing.folders) await walk(sub);
 		};
-		await walk(this.recoveryFolder);
+		await walk(root);
 		return found;
 	}
 
@@ -1006,6 +1150,15 @@ export class ConflictRecoveryView extends ItemView {
 		for (const artifact of artifacts) {
 			const item = root.createDiv({ cls: "conflict-panel__item" });
 			item.createDiv({ text: artifact.sourcePath, cls: "conflict-panel__path" });
+			if (!artifact.safe) {
+				// No button at all. An unsafe path gets an explanation, never a control
+				// that would have to refuse when pressed.
+				item.createDiv({
+					text: `This archive names a path outside the vault, so it cannot be copied back here. The file itself is intact at ${artifact.path}.`,
+					cls: "conflict-compare__warning",
+				});
+				continue;
+			}
 			item
 				.createEl("button", { text: "Copy back to its original path" })
 				.addEventListener("click", () => void this.restore(artifact));
@@ -1017,12 +1170,14 @@ export class ConflictRecoveryView extends ItemView {
 			const content = await this.app.vault.adapter.read(artifact.path);
 			// createNew is the only write path a view gets, and `create` inside it is
 			// the sole no-clobber guard. No exists()-then-write here.
-			await this.ops.createNew(artifact.sourcePath, content);
+			await this.ops().createNew(artifact.sourcePath, content);
 			new Notice(`Copied back to ${artifact.sourcePath}. The archive is still in recovery.`);
 			await this.render();
 		} catch (error) {
 			if (error instanceof DestinationOccupied) {
 				new Notice(`${artifact.sourcePath} already exists. Nothing was written.`);
+			} else if (error instanceof UnsafePath) {
+				new Notice(String(error.message));
 			} else {
 				new Notice(`Could not restore: ${String(error)}`);
 			}
@@ -1036,7 +1191,7 @@ export class ConflictRecoveryView extends ItemView {
 ```ts
 this.registerView(
 	CONFLICT_RECOVERY_VIEW,
-	(leaf) => new ConflictRecoveryView(leaf, this.ops, this.settings.recoveryFolder),
+	(leaf) => new ConflictRecoveryView(leaf, () => this.ops, () => this.settings.recoveryFolder),
 );
 
 this.addCommand({
@@ -1080,6 +1235,17 @@ entry point is reached through exactly one guarded method, `run()`.
 A fifth followed from the third: recovery restore was `adapter.exists` then `adapter.rename`,
 check-then-act with no no-clobber guarantee. Restore now copies and leaves the archive alone,
 which removes the race instead of guarding it.
+
+**Three more after the second rejection.** Also all real:
+
+| defect in the second draft | fix |
+|---|---|
+| `VaultOps` captured once, stale after `saveSettings` moves the recovery folder | views take `() => VaultOps`; `main.ts` rebuilds it and rescans on save |
+| overlapping `loadSelection` reads could pair copy B's selection with copy A's text | a `loadToken` generation guard; no field is assigned until the read proves current |
+| a decoded artifact path is a filename on disk and can be `../outside.md` | `isSafeVaultPath` rejects it, `createNew` throws `UnsafePath` before any vault call, and the row is listed with no restore button |
+
+The third is the serious one. `..%2Foutside.md.conflictbak` is an ordinary filename that
+Syncthing will deliver, and `sourcePathFromRecovery` decodes it straight to `../outside.md`.
 
 **Known gaps this plan does not close, deliberately:**
 - The three views have no unit tests. Obsidian's `ItemView` cannot be instantiated outside the
