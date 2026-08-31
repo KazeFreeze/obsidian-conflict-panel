@@ -1228,6 +1228,15 @@ export class ConflictRecoveryView extends ItemView {
 				});
 				continue;
 			}
+			if (!artifact.sourcePath.endsWith(".md")) {
+				// Text reads would corrupt an opaque binary artifact. Keep it listed but
+				// offer no restore control; the archive itself remains intact.
+				item.createDiv({
+					text: `This is not a Markdown file, so Conflict Panel cannot safely copy it back. The binary archive is intact at ${artifact.path}.`,
+					cls: "conflict-compare__warning",
+				});
+				continue;
+			}
 			item
 				.createEl("button", { text: "Copy back to its original path" })
 				.addEventListener("click", () => void this.restore(artifact));
