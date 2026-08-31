@@ -1,4 +1,4 @@
-import type { App, TFile } from "obsidian";
+import { TFile, type App } from "obsidian";
 
 /** Thrown when the file changed between review and write. Aborts cleanly. */
 export class StaleInput extends Error {
@@ -83,12 +83,19 @@ export class VaultOps {
 	/** Restore without clobber: create first, then archive the still-existing copy. */
 	async restoreTo(copy: TFile, originalPath: string): Promise<void> {
 		const content = await this.app.vault.read(copy);
-		// This lookup only recognizes a destination that is already occupied. It
+		// This lookup only recognizes a retry or a destination already occupied. It
 		// NEVER authorizes the write and is not the old check-then-act scheme:
 		// create() remains the sole no-clobber safety guard. If the path is empty
 		// now but occupied before create runs, create throws and nothing is clobbered.
-		if (this.app.vault.getAbstractFileByPath(originalPath)) {
-			throw new DestinationOccupied(originalPath);
+		const existing = this.app.vault.getAbstractFileByPath(originalPath);
+		if (existing) {
+			if (!(existing instanceof TFile)) throw new DestinationOccupied(originalPath);
+			const existingContent = await this.app.vault.read(existing);
+			if (existingContent !== content) throw new DestinationOccupied(originalPath);
+			// A previous attempt completed create but failed to archive. Exact content
+			// equality makes the remaining archival step safely retryable.
+			await this.moveToRecovery(copy);
+			return;
 		}
 		// Obsidian exposes no typed create error. An occupancy race, permissions,
 		// and an invalid path therefore remain distinct only as their raw causes.

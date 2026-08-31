@@ -2,7 +2,15 @@ import type { App, TFile } from "obsidian";
 import { describe, expect, it, vi } from "vitest";
 import { ArchiveNameTooLong, DestinationOccupied, StaleInput, VaultOps } from "./vault-ops";
 
-const file = (path: string): TFile => ({ path }) as TFile;
+const { MockTFile } = vi.hoisted(() => ({
+	MockTFile: class {
+		constructor(readonly path: string) {}
+	},
+}));
+
+vi.mock("obsidian", () => ({ TFile: MockTFile }));
+
+const file = (path: string): TFile => new MockTFile(path) as TFile;
 
 // This in-memory fake establishes exact path/content outcomes and control flow.
 // It cannot prove rename atomicity, cache invalidation, editor behaviour, process
@@ -49,7 +57,8 @@ class FakeVault {
 		this.files.delete(source.path);
 	});
 	readonly getAbstractFileByPath = vi.fn((path: string) => {
-		if (this.files.has(path) || this.folders.has(path)) return { path };
+		if (this.files.has(path)) return file(path);
+		if (this.folders.has(path)) return { path };
 		return null;
 	});
 
@@ -172,6 +181,26 @@ describe("VaultOps restore", () => {
 		).rejects.toBe(permissions);
 		expect(vault.files.get("copy.md")).toBe("copy contents");
 		expect(vault.files.has("original.md")).toBe(false);
+	});
+
+	it("retries only archival when a prior restore already created identical content", async () => {
+		const vault = new FakeVault([["copy.md", "copy contents"]]);
+		vault.renameFailures.add("copy.md");
+		const ops = new VaultOps(vault.asApp(), "Recovery");
+
+		await expect(ops.restoreTo(file("copy.md"), "original.md")).rejects.toThrow(
+			"Move failed: copy.md",
+		);
+		expect(vault.files.get("original.md")).toBe("copy contents");
+		expect(vault.files.get("copy.md")).toBe("copy contents");
+
+		vault.renameFailures.delete("copy.md");
+		await ops.restoreTo(file("copy.md"), "original.md");
+
+		expect(vault.create).toHaveBeenCalledTimes(1);
+		expect(vault.files.get("original.md")).toBe("copy contents");
+		expect(vault.files.get("Recovery/copy.md.conflictbak")).toBe("copy contents");
+		expect(vault.files.has("copy.md")).toBe(false);
 	});
 });
 

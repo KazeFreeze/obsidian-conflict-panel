@@ -123,7 +123,11 @@ recognises a destination that is already occupied, creates the original, and onl
 copy. The lookup never authorises the write: `create` remains the sole safety guard, so a destination
 that appears after lookup still makes create fail without clobbering it. A confirmed existing file or
 folder becomes `DestinationOccupied`; a create failure changes nothing; an archive failure after
-create leaves a duplicate.
+create leaves a duplicate. Retrying that partial success reads both files: when the original is a
+`TFile` whose content exactly equals the copy, restore treats creation as already complete and
+retries only archival. A folder or different file content still produces `DestinationOccupied`.
+This equality may also recognise a coincidentally identical pre-existing note, but archival remains
+non-destructive: the copy moves to recovery and the identical original stays in place.
 
 **Create-error classification is limited by the public API.** Obsidian exposes no typed create
 error. If lookup saw an empty path and `create` then fails, callers cannot reliably distinguish a
@@ -267,7 +271,7 @@ file* stays inside the excluded folder and is excluded too. Regression test requ
 | `process` succeeds, then app dies | resolved original, copies unmoved — benign, rediscovered |
 | restore create finds an occupied original | clean abort, copy untouched |
 | restore create fails after an empty lookup | clean abort with raw, unclassified cause; copy untouched |
-| restore create succeeds, then archive fails | original and copy both remain — duplicate, no loss |
+| restore create succeeds, then archive fails | original and copy both remain; retry recognises exact content and retries only archive |
 | a copy changes between review and move | the *current* content is moved, not the reviewed content |
 | `rename` throws on one copy | that copy stays, others still processed |
 | recovery destination appears after its check | **previously archived losing version can be overwritten** |
