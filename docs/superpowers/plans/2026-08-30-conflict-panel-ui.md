@@ -1170,6 +1170,7 @@ export class ConflictRecoveryView extends ItemView {
 	private async render(): Promise<void> {
 		const root = this.contentEl;
 		root.empty();
+		root.addClass("conflict-recovery");
 		const artifacts = await this.listArtifacts();
 
 		const total = artifacts.reduce((n, a) => n + a.bytes, 0);
@@ -1232,6 +1233,21 @@ this.addCommand({
 	name: "Open conflict recovery",
 	callback: () => void this.openRecovery(),
 });
+```
+
+Add the command's supporting method. Reuse an existing recovery leaf and stay on the
+`setActiveLeaf` API supported by the plugin's Obsidian 1.1.0 minimum:
+
+```ts
+async openRecovery(): Promise<void> {
+	const [existing] = this.app.workspace.getLeavesOfType(CONFLICT_RECOVERY_VIEW);
+	if (existing) {
+		this.app.workspace.setActiveLeaf(existing, { focus: true });
+		return;
+	}
+	const leaf = this.app.workspace.getLeaf(true);
+	await leaf.setViewState({ type: CONFLICT_RECOVERY_VIEW, active: true });
+}
 ```
 
 - [ ] **Step 3: Verify and commit**

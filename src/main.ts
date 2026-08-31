@@ -2,6 +2,7 @@ import { Plugin } from "obsidian";
 import { CONFLICT_COMPARE_VIEW, ConflictCompareView } from "./compare-view";
 import type { ConflictGroup } from "./core/types";
 import { CONFLICT_PANEL_VIEW, ConflictPanelView } from "./panel-view";
+import { CONFLICT_RECOVERY_VIEW, ConflictRecoveryView } from "./recovery-view";
 import { scanConflicts } from "./scan";
 import {
 	ConflictPanelSettings,
@@ -35,11 +36,25 @@ export default class ConflictPanelPlugin extends Plugin {
 			CONFLICT_COMPARE_VIEW,
 			(leaf) => new ConflictCompareView(leaf, () => this.ops, () => this.rescan()),
 		);
+		this.registerView(
+			CONFLICT_RECOVERY_VIEW,
+			(leaf) =>
+				new ConflictRecoveryView(
+					leaf,
+					() => this.ops,
+					() => this.settings.recoveryFolder,
+				),
+		);
 		this.addRibbonIcon("git-merge", "Show conflicts", () => void this.revealPanel());
 		this.addCommand({
 			id: "scan-conflicts",
 			name: "Scan for sync conflicts",
 			callback: () => void this.rescan(),
+		});
+		this.addCommand({
+			id: "open-recovery",
+			name: "Open conflict recovery",
+			callback: () => void this.openRecovery(),
 		});
 		this.addSettingTab(new ConflictPanelSettingTab(this.app, this));
 	}
@@ -69,6 +84,16 @@ export default class ConflictPanelPlugin extends Plugin {
 		if (leaf.view instanceof ConflictCompareView) {
 			await leaf.view.setGroup(group);
 		}
+	}
+
+	async openRecovery(): Promise<void> {
+		const [existing] = this.app.workspace.getLeavesOfType(CONFLICT_RECOVERY_VIEW);
+		if (existing) {
+			this.app.workspace.setActiveLeaf(existing, { focus: true });
+			return;
+		}
+		const leaf = this.app.workspace.getLeaf(true);
+		await leaf.setViewState({ type: CONFLICT_RECOVERY_VIEW, active: true });
 	}
 
 	private rebuildOps(): void {
