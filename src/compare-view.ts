@@ -57,8 +57,23 @@ export class ConflictCompareView extends ItemView {
 		this.loading = true;
 		const copy = this.copyFile();
 		const original = this.originalFile();
-		const copyText = copy ? await this.app.vault.read(copy) : null;
-		const originalText = original ? await this.app.vault.read(original) : null;
+		let copyText: string | null = null;
+		let originalText: string | null = null;
+		try {
+			copyText = copy ? await this.app.vault.read(copy) : null;
+			originalText = original ? await this.app.vault.read(original) : null;
+		} catch (error) {
+			// A copy Syncthing removed mid-read would otherwise leave `loading` set
+			// forever: every action stays disabled and nothing on screen says why.
+			if (token !== this.loadToken) return;
+			this.reviewedCopy = null;
+			this.reviewedOriginal = null;
+			this.diff = null;
+			this.awaitingConfirmation = false;
+			this.loading = false;
+			new Notice(`Could not read this conflict: ${String(error)}. Rescan and try again.`);
+			return;
+		}
 		if (token !== this.loadToken) return;
 
 		this.reviewedCopy = copyText;
