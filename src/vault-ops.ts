@@ -80,7 +80,7 @@ export class VaultOps {
 		return results;
 	}
 
-	/** Restore without clobber: create first, then archive the still-existing copy. */
+	/** Restore without clobber, or finish archival after an identical partial restore. */
 	async restoreTo(copy: TFile, originalPath: string): Promise<void> {
 		const content = await this.app.vault.read(copy);
 		// This lookup only recognizes a retry or a destination already occupied. It

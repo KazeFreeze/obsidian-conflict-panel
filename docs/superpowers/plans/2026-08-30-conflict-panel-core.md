@@ -1001,7 +1001,7 @@ export class VaultOps {
 		return results;
 	}
 
-	/** Restore without clobber: create first, then archive the still-existing copy. */
+	/** Restore without clobber, or finish archival after an identical partial restore. */
 	async restoreTo(copy: TFile, originalPath: string): Promise<void> {
 		const content = await this.app.vault.read(copy);
 		// This lookup only recognizes a retry or a destination already occupied. It
@@ -1112,6 +1112,9 @@ For restore, assert that a known file or folder produces `DestinationOccupied`, 
 `vault.create` rejection is returned as the exact raw cause and leaves both paths unchanged.
 Force archival to fail after create, assert the original and copy both hold the restored content,
 then retry and prove create was not called again and only the copy was moved to its exact archive.
+For every `moveAllToRecovery` result, assert the exact input `copy` object and its exact
+`recoveryPath` or exact thrown `error`, not only statuses and final vault state. After placing a new
+collision archive, re-assert the content of every older archive populated by the fixture.
 
 - [ ] **Step 5: Run the full suite**
 

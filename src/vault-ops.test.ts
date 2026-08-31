@@ -18,7 +18,7 @@ const file = (path: string): TFile => new MockTFile(path) as TFile;
 class FakeVault {
 	readonly files = new Map<string, string>();
 	readonly folders = new Set<string>();
-	readonly renameFailures = new Set<string>();
+	readonly renameFailures = new Map<string, Error>();
 	createFailure: Error | null = null;
 
 	readonly adapter = {
@@ -49,7 +49,8 @@ class FakeVault {
 		this.files.set(source.path, update(current));
 	});
 	readonly rename = vi.fn(async (source: TFile, target: string) => {
-		if (this.renameFailures.has(source.path)) throw new Error(`Move failed: ${source.path}`);
+		const failure = this.renameFailures.get(source.path);
+		if (failure) throw failure;
 		const content = this.files.get(source.path);
 		if (content === undefined) throw new Error(`Missing file: ${source.path}`);
 		// Model the overwrite-prone adapter semantics documented by VaultOps.
@@ -84,6 +85,10 @@ async function archiveAtCollision(sourcePath: string, collisionNumber: number): 
 	const target = await new VaultOps(vault.asApp(), "Recovery").moveToRecovery(file(sourcePath));
 	expect(vault.files.get(target)).toBe("new losing version");
 	expect(vault.files.has(sourcePath)).toBe(false);
+	if (collisionNumber > 1) expect(vault.files.get(`Recovery/${encoded}`)).toBe("archive 1");
+	for (let n = 2; n < collisionNumber; n++) {
+		expect(vault.files.get(`Recovery/${n}/${encoded}`)).toBe(`archive ${n}`);
+	}
 	return target;
 }
 
@@ -185,14 +190,15 @@ describe("VaultOps restore", () => {
 
 	it("retries only archival when a prior restore already created identical content", async () => {
 		const vault = new FakeVault([["copy.md", "copy contents"]]);
-		vault.renameFailures.add("copy.md");
+		const archiveFailure = new Error("archive unavailable");
+		vault.renameFailures.set("copy.md", archiveFailure);
 		const ops = new VaultOps(vault.asApp(), "Recovery");
 
-		await expect(ops.restoreTo(file("copy.md"), "original.md")).rejects.toThrow(
-			"Move failed: copy.md",
-		);
+		await expect(ops.restoreTo(file("copy.md"), "original.md")).rejects.toBe(archiveFailure);
 		expect(vault.files.get("original.md")).toBe("copy contents");
 		expect(vault.files.get("copy.md")).toBe("copy contents");
+		expect(vault.files.has("Recovery/copy.md.conflictbak")).toBe(false);
+		expect(vault.create).toHaveBeenCalledTimes(1);
 
 		vault.renameFailures.delete("copy.md");
 		await ops.restoreTo(file("copy.md"), "original.md");
@@ -236,13 +242,29 @@ describe("VaultOps batch recovery", () => {
 			["bad.md", "bad content"],
 			["last.md", "last content"],
 		]);
-		vault.renameFailures.add("bad.md");
+		const first = file("first.md");
+		const bad = file("bad.md");
+		const last = file("last.md");
+		const moveFailure = new Error("bad move failed");
+		vault.renameFailures.set("bad.md", moveFailure);
 		const results = await new VaultOps(vault.asApp(), "Recovery").moveAllToRecovery([
-			file("first.md"),
-			file("bad.md"),
-			file("last.md"),
+			first,
+			bad,
+			last,
 		]);
-		expect(results.map((result) => result.status)).toEqual(["moved", "failed", "moved"]);
+		expect(results).toEqual([
+			{
+				copy: first,
+				status: "moved",
+				recoveryPath: "Recovery/first.md.conflictbak",
+			},
+			{ copy: bad, status: "failed", error: moveFailure },
+			{
+				copy: last,
+				status: "moved",
+				recoveryPath: "Recovery/last.md.conflictbak",
+			},
+		]);
 		expect(vault.files.get("Recovery/first.md.conflictbak")).toBe("first content");
 		expect(vault.files.get("bad.md")).toBe("bad content");
 		expect(vault.files.has("Recovery/bad.md.conflictbak")).toBe(false);
