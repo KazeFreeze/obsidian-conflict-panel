@@ -984,11 +984,27 @@ preserved in recovery rather than left behind to be rediscovered.
 
 		if (action === "restore-copy") {
 			if (!copy) return false;
-			// restoreTo archives the copy it restored; the remaining ones follow.
-			await this.ops().restoreTo(copy, group.originalPath);
-			const rest = this.allCopyFiles();
-			if (rest.length > 0) await this.archiveAll(rest);
-			new Notice(`Restored ${group.originalPath}.`);
+			let selectedArchiveFailed = false;
+			try {
+				// restoreTo archives the selected copy after recreating the original.
+				await this.ops().restoreTo(copy, group.originalPath);
+			} catch (error) {
+				// The restore itself succeeded. One failed archival must not prevent the
+				// remaining copies from being attempted independently.
+				if (!(error instanceof RestoreArchiveFailed)) throw error;
+				selectedArchiveFailed = true;
+			}
+
+			const rest = this.allCopyFiles().filter((file) => file.path !== copy.path);
+			const results = await this.ops().moveAllToRecovery(rest);
+			const restFailed = results.filter((result) => result.status === "failed").length;
+			const failed = restFailed + (selectedArchiveFailed ? 1 : 0);
+			const moved = results.length - restFailed + (selectedArchiveFailed ? 0 : 1);
+			new Notice(
+				failed === 0
+					? `Restored ${group.originalPath}. Moved ${moved} to recovery.`
+					: `Restored ${group.originalPath}. Moved ${moved} to recovery; ${failed} could not be moved. Nothing was deleted.`,
+			);
 			return true;
 		}
 

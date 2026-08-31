@@ -256,10 +256,24 @@ export class ConflictCompareView extends ItemView {
 		}
 		if (action === "restore-copy") {
 			if (!copy) return false;
-			await this.ops().restoreTo(copy, group.originalPath);
-			const remaining = this.allCopyFiles();
-			if (remaining.length > 0) await this.archiveAll(remaining);
-			new Notice(`Restored ${group.originalPath}.`);
+			let selectedArchiveFailed = false;
+			try {
+				await this.ops().restoreTo(copy, group.originalPath);
+			} catch (error) {
+				if (!(error instanceof RestoreArchiveFailed)) throw error;
+				selectedArchiveFailed = true;
+			}
+
+			const remaining = this.allCopyFiles().filter((file) => file.path !== copy.path);
+			const results = await this.ops().moveAllToRecovery(remaining);
+			const remainingFailed = results.filter((result) => result.status === "failed").length;
+			const failed = remainingFailed + (selectedArchiveFailed ? 1 : 0);
+			const moved = results.length - remainingFailed + (selectedArchiveFailed ? 0 : 1);
+			new Notice(
+				failed === 0
+					? `Restored ${group.originalPath}. Moved ${moved} to recovery.`
+					: `Restored ${group.originalPath}. Moved ${moved} to recovery; ${failed} could not be moved. Nothing was deleted.`,
+			);
 			return true;
 		}
 		if (action === "save-as-new") {
