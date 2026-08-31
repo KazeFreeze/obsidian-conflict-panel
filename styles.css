@@ -1,30 +1,126 @@
 /*
+ * Conflict Panel styles.
+ *
+ * Two rules drive most of this. Every control keeps a 48px touch target because
+ * the plugin runs on Android, and no view may scroll horizontally: a sidebar is
+ * narrow, paths are long, and a horizontal scrollbar hides content rather than
+ * revealing it. Long text wraps instead.
+ */
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
-
-If your plugin does not need CSS, delete this file.
-
-*/
-
-.conflict-panel button,
-.conflict-compare button,
-.conflict-recovery button {
-	/* 48dp minimum touch target: this plugin runs on Android. */
-	min-height: 48px;
+.conflict-panel,
+.conflict-recovery,
+.conflict-compare {
+	overflow-x: hidden;
 }
 
-.conflict-panel__entry,
-.conflict-compare__copies button {
-	width: 100%;
-	text-align: left;
+.conflict-panel button,
+.conflict-recovery button,
+.conflict-compare button {
+	min-height: 48px;
+	/* Obsidian's buttons do not wrap. A long explanation would otherwise run off
+	   the panel and take the whole sidebar into horizontal scroll. */
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+
+/* --- panel: the group list --------------------------------------------- */
+
+.conflict-panel__header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin-bottom: 8px;
+}
+
+.conflict-panel__header h4 {
+	margin: 0;
+}
+
+.conflict-panel__list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.conflict-panel__item {
 	margin-bottom: 6px;
 }
 
+.conflict-panel__entry {
+	/* A column, not three inline spans: without this the path, the count and the
+	   explanation concatenate into "Big.md1 copy" on one unwrapped line. */
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+	width: 100%;
+	height: auto;
+	padding: 8px 12px;
+	text-align: left;
+}
+
+.conflict-panel__path {
+	font-weight: 600;
+	max-width: 100%;
+	overflow-wrap: anywhere;
+}
+
+.conflict-panel__meta,
+.conflict-panel__note {
+	font-size: 0.85em;
+	color: var(--text-muted);
+	max-width: 100%;
+	overflow-wrap: anywhere;
+}
+
+.conflict-panel__empty {
+	color: var(--text-muted);
+}
+
+/* --- recovery list ------------------------------------------------------ */
+
+.conflict-recovery .conflict-panel__item {
+	padding: 8px 0;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.conflict-recovery .conflict-panel__path {
+	margin-bottom: 6px;
+	overflow-wrap: anywhere;
+}
+
+/* --- compare view ------------------------------------------------------- */
+
+.conflict-compare__copies {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-bottom: 12px;
+}
+
+.conflict-compare__copies button {
+	flex: 1 1 12rem;
+	text-align: left;
+}
+
+.conflict-compare__copies button.is-selected {
+	border: 1px solid var(--interactive-accent);
+}
+
+.conflict-compare__actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 16px;
+}
+
 .conflict-compare__actions button {
-	width: auto;
 	padding: 0 16px;
-	margin-right: 8px;
+}
+
+.conflict-compare__explanation {
+	color: var(--text-muted);
 }
 
 .conflict-compare__warning {
@@ -35,6 +131,8 @@ If your plugin does not need CSS, delete this file.
 .conflict-compare__diff {
 	font-family: var(--font-monospace);
 	font-size: 0.85em;
+	/* Diff lines keep their own horizontal scroll so leading indentation stays
+	   readable, without the page itself scrolling sideways. */
 	overflow-x: auto;
 }
 
@@ -42,6 +140,13 @@ If your plugin does not need CSS, delete this file.
 	border-left: 2px solid var(--background-modifier-border);
 	padding-left: 8px;
 	margin: 8px 0;
+}
+
+.conflict-compare__line {
+	/* pre-wrap, not pre: preserve indentation, still wrap a long line. */
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	padding: 0 4px;
 }
 
 .conflict-compare__line.is-left {
@@ -53,8 +158,8 @@ If your plugin does not need CSS, delete this file.
 }
 
 @media (max-width: 600px) {
-	.conflict-compare__actions button {
-		width: 100%;
-		margin: 0 0 8px;
+	.conflict-compare__actions button,
+	.conflict-compare__copies button {
+		flex: 1 1 100%;
 	}
 }
