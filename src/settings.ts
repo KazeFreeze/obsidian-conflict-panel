@@ -12,7 +12,11 @@ export const DEFAULT_SETTINGS: ConflictPanelSettings = {
 
 /** Canonicalize once where settings enter the application. */
 export function normalizeRecoveryFolder(value: string): string {
-	return normalizePath(value.trim()) || DEFAULT_SETTINGS.recoveryFolder;
+	const canonical = normalizePath(value.trim())
+		.split("/")
+		.filter((segment) => segment && segment !== ".")
+		.join("/");
+	return canonical || DEFAULT_SETTINGS.recoveryFolder;
 }
 
 export class ConflictPanelSettingTab extends PluginSettingTab {

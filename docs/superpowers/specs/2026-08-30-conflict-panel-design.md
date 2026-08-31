@@ -236,9 +236,11 @@ group** as an escape hatch, and grouping is never acted on without the user seei
 paired.
 
 **Re-detection is prevented by folder exclusion, not by the extension.** The recovery-folder setting
-is normalized once with Obsidian's `normalizePath` when loaded or changed, then that one canonical
-value is passed unchanged to grouping, folder creation, and archive naming. This handles leading or
-repeated separators, `.` segments, and backslashes without three implementations disagreeing.
+is normalized once when loaded or changed: Obsidian's `normalizePath` handles its actual separator,
+surrounding-slash, whitespace, and Unicode behavior, then the plugin explicitly removes empty and
+`.` path segments. The resulting canonical value is passed unchanged to grouping, folder creation,
+and archive naming. This handles leading or repeated separators, `.` segments, and backslashes
+without assuming undocumented behavior from Obsidian or letting three implementations disagree.
 `core/group.ts` rejects that recovery root outright. The non-note extension is defence in depth: an
 ordinary note can legitimately contain a valid-looking `.sync-conflict-*` sequence, especially with
 multiple extensions, so filename rules alone are insufficient. A Syncthing conflict *of an archived

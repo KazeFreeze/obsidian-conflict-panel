@@ -109,7 +109,11 @@ export const DEFAULT_SETTINGS: ConflictPanelSettings = {
 
 /** Canonicalize once where settings enter the application. */
 export function normalizeRecoveryFolder(value: string): string {
-	return normalizePath(value.trim()) || DEFAULT_SETTINGS.recoveryFolder;
+	const canonical = normalizePath(value.trim())
+		.split("/")
+		.filter((segment) => segment && segment !== ".")
+		.join("/");
+	return canonical || DEFAULT_SETTINGS.recoveryFolder;
 }
 
 export class ConflictPanelSettingTab extends PluginSettingTab {
@@ -181,10 +185,12 @@ export default class ConflictPanelPlugin extends Plugin {
 
 - [ ] **Step 5a: Test settings-boundary normalization**
 
-Mock Obsidian's `normalizePath` in `src/settings.test.ts`. Assert that leading and repeated
-separators, `Archive/./Conflicts`, and `Archive\\Conflicts` all become the same canonical value,
-and that an empty normalized value falls back to the default. Core grouping receives only this
-canonical value and must not implement a second normalizer.
+Mock only Obsidian's actual `normalizePath` behavior in `src/settings.test.ts`; the mock must not
+remove `.` segments. Assert that leading and repeated separators and `Archive\\Conflicts` are
+canonicalized, while plugin-owned processing handles `Archive/./Conflicts`, `./Conflicts`,
+`Conflicts/.`, `a/./b/./c`, and a value made entirely of dot/empty segments. The last case falls
+back to the default. Core grouping receives only this canonical value and must not implement a
+second normalizer.
 
 - [ ] **Step 6: Replace `README.md`**
 

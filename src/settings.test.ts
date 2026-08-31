@@ -3,10 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { normalizePath } = vi.hoisted(() => ({
 	normalizePath: vi.fn((value: string) =>
 		value
+			.trim()
 			.replace(/\\/g, "/")
-			.split("/")
-			.filter((segment) => segment && segment !== ".")
-			.join("/"),
+			.replace(/\/+/g, "/")
+			.replace(/^\/+|\/+$/g, ""),
 	),
 }));
 
@@ -29,6 +29,9 @@ describe("normalizeRecoveryFolder", () => {
 	it.each([
 		[" /Archive//Conflicts/ ", "Archive/Conflicts"],
 		["Archive/./Conflicts", "Archive/Conflicts"],
+		["./Conflicts", "Conflicts"],
+		["Conflicts/.", "Conflicts"],
+		["a/./b/./c", "a/b/c"],
 		["Archive\\Conflicts", "Archive/Conflicts"],
 	])("normalizes %j with Obsidian at the settings boundary", (input, expected) => {
 		expect(normalizeRecoveryFolder(input)).toBe(expected);
@@ -36,6 +39,6 @@ describe("normalizeRecoveryFolder", () => {
 	});
 
 	it("uses the default when normalization produces an empty path", () => {
-		expect(normalizeRecoveryFolder(" /./ ")).toBe("Conflict Recovery");
+		expect(normalizeRecoveryFolder(" ././ ")).toBe("Conflict Recovery");
 	});
 });
